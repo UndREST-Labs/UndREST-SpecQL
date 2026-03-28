@@ -1,0 +1,3 @@
+paths:
+ - .           # a root directory must always be explicitly named :-/
+ - "**/*.json" # include all json files

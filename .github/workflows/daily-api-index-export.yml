@@ -1,0 +1,60 @@
+name: Daily API Index Export
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC
+    - cron: '0 4 * * *'
+
+  workflow_dispatch:
+    inputs:
+      spec_scope:
+        description: 'Subdirectory within azure-rest-api-specs to export (default: specification)'
+        required: false
+        default: 'specification'
+
+jobs:
+  export-api-index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout UndREST-SpecQL
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install pyfiglet pytest
+
+      - name: Clone / update azure-rest-api-specs
+        run: |
+          python3 refresh_database.py --all --skip-db-build
+
+      - name: Run API inventory export
+        run: |
+          SCOPE="${{ github.event.inputs.spec_scope || 'specification' }}"
+          python3 scripts/export/export_api_inventory.py \
+            --source "azure-rest-api-specs/${SCOPE}" \
+            --output-dir inventory/ \
+            --grouped \
+            --minified \
+            --verbose
+
+      - name: Run export pipeline tests
+        run: |
+          python3 -m pytest \
+            tests/test_api_inventory_export.py \
+            tests/test_api_inventory_normalization.py \
+            -v
+
+      - name: Upload inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-index-${{ github.run_id }}
+          path: inventory/
+          retention-days: 30

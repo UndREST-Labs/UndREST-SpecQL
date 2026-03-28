@@ -1,0 +1,88 @@
+name: Daily API Index Export (Sharded)
+
+on:
+  schedule:
+    # Run daily at 05:00 UTC
+    - cron: '0 5 * * *'
+
+  workflow_dispatch:
+    inputs:
+      spec_scope:
+        description: 'Subdirectory within azure-rest-api-specs to export (default: specification)'
+        required: false
+        default: 'specification'
+
+jobs:
+  export-api-index-sharded:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout UndREST-SpecQL
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install pyfiglet pytest
+
+      - name: Clone / update azure-rest-api-specs
+        run: |
+          python3 refresh_database.py --all --skip-db-build
+
+      - name: Run API inventory export
+        run: |
+          SCOPE="${{ github.event.inputs.spec_scope || 'specification' }}"
+          python3 scripts/export/export_api_inventory.py \
+            --source "azure-rest-api-specs/${SCOPE}" \
+            --output-dir inventory/ \
+            --sharded \
+            --minified \
+            --verbose
+
+      - name: Run export pipeline tests
+        run: |
+          python3 -m pytest \
+            tests/test_api_inventory_export.py \
+            tests/test_api_inventory_normalization.py \
+            -v
+
+      - name: Publish shards to GitHub Release
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: shards-latest
+          name: "Latest API Shards"
+          body: |
+            Auto-updated sharded API index generated from `Azure/azure-rest-api-specs`.
+            Consumed by [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) to keep extension shard data current.
+          files: inventory/api-index-sharded-*.zip
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger APISpy shard update
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.APISPY_DISPATCH_TOKEN }}
+          repository: UndREST-Labs/UndREST-APISpy
+          event-type: speql-shards-updated
+          client-payload: |
+            {
+              "run_id": "${{ github.run_id }}",
+              "tag": "shards-latest",
+              "triggered_by": "${{ github.event_name }}"
+            }
+
+      - name: Upload inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-index-sharded-${{ github.run_id }}
+          path: inventory/
+          retention-days: 30

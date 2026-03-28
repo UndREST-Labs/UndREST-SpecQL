@@ -1,0 +1,5 @@
+# UndREST-SpecQL
+# Python dependencies for the CLI menu system and export pipeline
+
+# For rendering the SpeQL logo in ASCII art
+pyfiglet>=0.8.0
