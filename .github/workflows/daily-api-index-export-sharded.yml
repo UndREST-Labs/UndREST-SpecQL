@@ -54,31 +54,39 @@ jobs:
 
       - name: Publish shards to GitHub Release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: shards-latest
-          name: "Latest API Shards"
-          body: |
-            Auto-updated sharded API index generated from `Azure/azure-rest-api-specs`.
-            Consumed by [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) to keep extension shard data current.
-          files: inventory/api-index-sharded-*.zip
-          make_latest: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="Auto-updated sharded API index generated from \`Azure/azure-rest-api-specs\`.
+          Consumed by [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) to keep extension shard data current."
+
+          # Create release if it doesn't exist, then upload/overwrite assets
+          if gh release view shards-latest > /dev/null 2>&1; then
+            gh release upload shards-latest inventory/api-index-sharded-*.zip --clobber
+          else
+            gh release create shards-latest inventory/api-index-sharded-*.zip \
+              --title "Latest API Shards" \
+              --notes "$NOTES" \
+              --latest
+          fi
 
       - name: Trigger APISpy shard update
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.APISPY_DISPATCH_TOKEN }}
-          repository: UndREST-Labs/UndREST-APISpy
-          event-type: speql-shards-updated
-          client-payload: |
-            {
-              "run_id": "${{ github.run_id }}",
-              "tag": "shards-latest",
-              "triggered_by": "${{ github.event_name }}"
-            }
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.APISPY_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --fail-with-body \
+            https://api.github.com/repos/UndREST-Labs/UndREST-APISpy/dispatches \
+            -d '{
+              "event_type": "speql-shards-updated",
+              "client_payload": {
+                "run_id": "${{ github.run_id }}",
+                "tag": "shards-latest",
+                "triggered_by": "${{ github.event_name }}"
+              }
+            }'
 
       - name: Upload inventory artifact
         uses: actions/upload-artifact@v4
