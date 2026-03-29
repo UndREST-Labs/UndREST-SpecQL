@@ -1,4 +1,4 @@
 name: speql/azure-security
 version: 1.0.0
 dependencies:
-  codeql/javascript-all: "*"
+  codeql/javascript-all: "~0.9.0"
