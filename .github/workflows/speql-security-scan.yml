@@ -47,7 +47,7 @@ jobs:
 
       - name: Clone / update azure-rest-api-specs
         run: |
-          python3 refresh_database.py --all --skip-db-build
+          python3 refresh_database.py --all #--skip-db-build
 
       - name: Create CodeQL database
         run: |
