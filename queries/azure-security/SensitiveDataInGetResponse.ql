@@ -15,16 +15,17 @@
 
 import javascript
 
-from JsonObject prop, JsonObject response
+from JsonObject parent, JsonObject prop, string propName
 where
   // Identify properties in response schemas that look like credentials
+  parent.getPropValue(propName) = prop and
   (
-    prop.getName().matches("%key%") or
-    prop.getName().matches("%secret%") or
-    prop.getName().matches("%token%") or
-    prop.getName().matches("%password%") or
-    prop.getName().matches("%connectionString%")
+    propName.matches("%key%") or
+    propName.matches("%secret%") or
+    propName.matches("%token%") or
+    propName.matches("%password%") or
+    propName.matches("%connectionString%")
   ) and
   // Flag those missing the x-ms-secret annotation in a GET response
-  not prop.getPropValue("x-ms-secret").getValue() = "true"
+  not prop.getPropValue("x-ms-secret").(JsonString).getValue() = "true"
 select prop, "Sensitive property found in GET response schema without x-ms-secret: true annotation."

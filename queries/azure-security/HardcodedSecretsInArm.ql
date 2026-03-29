@@ -18,6 +18,6 @@ import javascript
 from JsonObject param
 where
   // Identify securestring parameters with insecure default values
-  param.getPropValue("type").getValue() = "securestring" and
-  param.hasProp("defaultValue")
+  param.getPropValue("type").(JsonString).getValue() = "securestring" and
+  exists(param.getPropValue("defaultValue"))
 select param, "Insecure default value found on a securestring ARM parameter."
