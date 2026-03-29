@@ -2,20 +2,26 @@
 """
 export_api_inventory.py — SpecRecon API Inventory Export
 
-Walks the azure-rest-api-specs/specification/ directory tree, parses every
-OpenAPI/Swagger JSON spec file, and produces a normalized api-index.json that
-can later be used for "spec vs reality" comparison of Azure REST API calls.
+Walks a directory of OpenAPI/Swagger JSON spec files, parses every operation, and
+produces a normalized api-index.json that can be used for "spec vs reality"
+comparison of REST API calls.
+
+Works with any OpenAPI/Swagger spec corpus — not just azure-rest-api-specs.  The
+upstream repository and branch are supplied via --source-repo / --source-branch
+(or auto-detected from git) and recorded in the export metadata.
 
 Usage:
     python3 scripts/export/export_api_inventory.py [options]
 
 Options:
-    --source      Path to the specifications directory (default: azure-rest-api-specs/specification)
-    --output-dir  Directory where the output files are written (default: inventory/)
-    --minified    Also produce a minified api-index.min.json (no indentation)
-    --grouped     Also produce a grouped/deduplicated api-index-grouped.json (schema 3.0.0)
-    --sharded     Also produce per-provider shards under {output-dir}/shards/ (schema 3.0.0)
-    --verbose     Print per-file progress messages
+    --source        Path to the specifications directory (default: azure-rest-api-specs/specification)
+    --output-dir    Directory where the output files are written (default: inventory/)
+    --source-repo   Upstream repository identifier recorded in metadata (e.g. Azure/azure-rest-api-specs)
+    --source-branch Branch name recorded in metadata (default: main)
+    --minified      Also produce a minified api-index.min.json (no indentation)
+    --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.0.0)
+    --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.0.0)
+    --verbose       Print per-file progress messages
 
 Output files:
     api-index.json                     Flat pretty-printed index (schema 2.1.0)
@@ -29,6 +35,7 @@ Output files:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -59,8 +66,12 @@ TOOL_NAME = "SpecRecon"
 TOOL_COMPONENT = "SpeQL"
 SCHEMA_VERSION = "2.1.0"          # flat format — minor bump for additive source_kind field
 GROUPED_SCHEMA_VERSION = "3.0.0"  # grouped/deduplicated format
-SOURCE_REPO = "Azure/azure-rest-api-specs"
-SOURCE_BRANCH = "main"
+
+# Source metadata defaults — overridden at runtime via CLI args or source config.
+# These remain as module-level sentinels so that callers that import and use
+# run_export() without passing explicit source metadata still work.
+_DEFAULT_SOURCE_REPO = "unknown"
+_DEFAULT_SOURCE_BRANCH = "main"
 
 # Directories whose contents should be skipped entirely
 _SKIP_DIRS = {
@@ -99,6 +110,41 @@ def _get_git_commit(repo_path: Path) -> str:
     except Exception:
         pass
     return "unknown"
+
+
+def _detect_source_repo(source_dir: Path) -> str:
+    """Try to infer the source repository identifier from the git remote URL.
+
+    For a directory at ``azure-rest-api-specs/specification`` the function
+    walks up to find the git root and reads the ``origin`` remote URL,
+    returning a short ``org/repo`` identifier (e.g. ``Azure/azure-rest-api-specs``).
+    Returns ``"unknown"`` when the information cannot be determined.
+    """
+    search_dir = source_dir
+    for _ in range(4):  # Walk up at most 4 levels
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=str(search_dir),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                url = result.stdout.strip()
+                # Extract org/repo from HTTPS or SSH URLs
+                # e.g. https://github.com/Azure/azure-rest-api-specs.git
+                #      git@github.com:Azure/azure-rest-api-specs.git
+                m = re.search(r"[:/]([^/:]+/[^/:]+?)(?:\.git)?$", url)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+        parent = search_dir.parent
+        if parent == search_dir:
+            break
+        search_dir = parent
+    return _DEFAULT_SOURCE_REPO
 
 
 # ---------------------------------------------------------------------------
@@ -498,8 +544,30 @@ def _write_sharded_index(
 # Main export logic
 # ---------------------------------------------------------------------------
 
-def run_export(source_dir: Path, output_dir: Path, minified: bool, verbose: bool, grouped: bool = False, sharded: bool = False) -> int:
-    """Execute the full export pipeline.  Returns an exit code (0 = success)."""
+def run_export(
+    source_dir: Path,
+    output_dir: Path,
+    minified: bool,
+    verbose: bool,
+    grouped: bool = False,
+    sharded: bool = False,
+    source_repo: str = "",
+    source_branch: str = "",
+) -> int:
+    """Execute the full export pipeline.  Returns an exit code (0 = success).
+
+    Args:
+        source_dir:    Directory containing the OpenAPI/Swagger spec files.
+        output_dir:    Directory where output files are written.
+        minified:      Also write minified output variants.
+        verbose:       Print per-file progress messages.
+        grouped:       Also write grouped/deduplicated api-index-grouped.json.
+        sharded:       Also write per-provider shard files under output_dir/shards/.
+        source_repo:   Identifier for the upstream spec repository (recorded in
+                       metadata).  Auto-detected from git when empty.
+        source_branch: Branch name used to clone the source repo (recorded in
+                       metadata).  Defaults to "main" when empty.
+    """
 
     print(f"[SpecRecon] Starting API inventory export")
     print(f"[SpecRecon] Source : {source_dir}")
@@ -515,10 +583,16 @@ def run_export(source_dir: Path, output_dir: Path, minified: bool, verbose: bool
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     source_commit = _get_git_commit(source_dir.parent if source_dir.parent.is_dir() else source_dir)
 
+    # Attempt to auto-detect source_repo from the git remote URL when not supplied
+    if not source_repo:
+        source_repo = _detect_source_repo(source_dir)
+
+    resolved_source_branch = source_branch or _DEFAULT_SOURCE_BRANCH
+
     metadata = {
         "generated_at": generated_at,
-        "source_repo": SOURCE_REPO,
-        "source_branch": SOURCE_BRANCH,
+        "source_repo": source_repo,
+        "source_branch": resolved_source_branch,
         "source_commit": source_commit,
         "export_scope": source_dir.name,
         "tool_name": TOOL_NAME,
@@ -625,7 +699,10 @@ def run_export(source_dir: Path, output_dir: Path, minified: bool, verbose: bool
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Export a normalized API inventory from Azure REST API specs.",
+        description=(
+            "Export a normalized API inventory from any OpenAPI/Swagger spec directory. "
+            "Works with azure-rest-api-specs and any other spec corpus."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -637,6 +714,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default="inventory/",
         help="Directory to write the output files (default: inventory/)",
+    )
+    parser.add_argument(
+        "--source-repo",
+        default="",
+        metavar="ORG/REPO",
+        help=(
+            "Upstream repository identifier recorded in the export metadata "
+            "(e.g. 'Azure/azure-rest-api-specs'). "
+            "Auto-detected from git when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--source-branch",
+        default="",
+        metavar="BRANCH",
+        help=(
+            "Branch name recorded in the export metadata (e.g. 'main'). "
+            "Defaults to 'main' when omitted."
+        ),
     )
     parser.add_argument(
         "--minified",
@@ -676,7 +772,16 @@ def main():
     source_dir = Path(args.source).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
 
-    sys.exit(run_export(source_dir, output_dir, args.minified, args.verbose, args.grouped, args.sharded))
+    sys.exit(run_export(
+        source_dir,
+        output_dir,
+        args.minified,
+        args.verbose,
+        args.grouped,
+        args.sharded,
+        source_repo=args.source_repo,
+        source_branch=args.source_branch,
+    ))
 
 
 if __name__ == "__main__":

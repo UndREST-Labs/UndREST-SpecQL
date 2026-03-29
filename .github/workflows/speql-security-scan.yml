@@ -7,8 +7,12 @@ on:
 
   workflow_dispatch:
     inputs:
+      source_config:
+        description: 'Path to source config JSON (default: config/sources/azure.json)'
+        required: false
+        default: 'config/sources/azure.json'
       spec_scope:
-        description: 'Subdirectory within azure-rest-api-specs to scan (default: specification/logic)'
+        description: 'Subdirectory within the specs repo to scan (default: specification/logic)'
         required: false
         default: 'specification'
 
@@ -45,24 +49,39 @@ jobs:
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
           codeql pack install queries/azure-security/
 
-      - name: Clone / update azure-rest-api-specs
+      - name: Resolve source config
+        id: source
         run: |
-          python3 refresh_database.py --all --skip-db-build
+          SOURCE_CONFIG="${{ github.event.inputs.source_config || 'config/sources/azure.json' }}"
+          echo "config=${SOURCE_CONFIG}" >> "$GITHUB_OUTPUT"
+          SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
+          DATABASE_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('database_dir','database/azure-api-db'))")
+          echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
+          echo "database_dir=${DATABASE_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone / update spec repository
+        run: |
+          python3 refresh_database.py \
+            --source-config "${{ steps.source.outputs.config }}" \
+            --all \
+            --skip-db-build
 
       - name: Create CodeQL database
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
           SCOPE="${{ github.event.inputs.spec_scope || 'specification/logic' }}"
-          mkdir -p database
-          codeql database create database/azure-api-db \
+          DATABASE_DIR="${{ steps.source.outputs.database_dir }}"
+          SPECS_DIR="${{ steps.source.outputs.specs_dir }}"
+          mkdir -p "$(dirname "${DATABASE_DIR}")"
+          codeql database create "${DATABASE_DIR}" \
             --language=javascript \
-            --source-root="azure-rest-api-specs/${SCOPE}" \
+            --source-root="${SPECS_DIR}/${SCOPE}" \
             --overwrite
 
       - name: Run SpeQL security queries
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
-          bash run-queries.sh || true
+          bash run-queries.sh --source-config "${{ steps.source.outputs.config }}" || true
 
       - name: Run SARIF analysis scripts
         if: always()
@@ -102,3 +121,4 @@ jobs:
           name: speql-sarif-analysis-${{ github.run_id }}
           path: analysis-output/
           retention-days: 30
+

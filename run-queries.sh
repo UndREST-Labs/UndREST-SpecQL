@@ -5,15 +5,25 @@ if [ -z "${CODEQL_ALLOW_INSTALLATION_ANYWHERE:-}" ]; then
     export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
 fi
 
-# SpeQL - API Spec Query Runner for Azure REST API
-# This script runs CodeQL queries to identify security vulnerabilities in Azure REST API specifications
+# SpeQL - API Spec Query Runner
+# Runs one or more CodeQL query packs against a CodeQL database built from an
+# API spec source.  By default the database path and query packs are read from
+# the source config (config/sources/azure.json).  All values can be overridden
+# on the command line, which means a single query pack can be run against
+# multiple databases (API sources) without any config changes.
 
 set -euo pipefail
 
-# Configuration
-DATABASE_PATH="database/azure-api-db"
-QUERIES_PATH="queries/azure-security"
+# ---------------------------------------------------------------------------
+# Defaults (overridden by --source-config / CLI flags)
+# ---------------------------------------------------------------------------
+DEFAULT_SOURCE_CONFIG="config/sources/azure.json"
+SOURCE_CONFIG=""
+DATABASE_PATH=""         # resolved after config load
 RESULTS_PATH="results"
+
+# Query pack overrides — empty means "use what the source config declares"
+QUERY_PACK_OVERRIDES=()
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,19 +38,169 @@ if [ -f "$SCRIPT_DIR/utils/memory_utils.sh" ]; then
     source "$SCRIPT_DIR/utils/memory_utils.sh"
 fi
 
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Run CodeQL security queries against an API spec database.
+
+By default, the database path and query packs are read from the source config
+(default: $DEFAULT_SOURCE_CONFIG).  Any value can be overridden on the command
+line so that a single query pack can be run against multiple API sources.
+
+OPTIONS:
+    -h, --help                    Show this help message
+        --source-config PATH      Source config JSON file
+                                  (default: $DEFAULT_SOURCE_CONFIG)
+        --database PATH           CodeQL database directory
+                                  (overrides source config database_dir)
+        --queries PATH            Query pack directory to run; may be repeated
+                                  to run multiple packs
+                                  (overrides source config query_packs)
+        --output-dir PATH         Directory for SARIF/BQRS results
+                                  (default: $RESULTS_PATH)
+
+EXAMPLES:
+    # Run queries declared in the default Azure source config
+    $0
+
+    # Run queries for a specific source config
+    $0 --source-config config/sources/azure.json
+
+    # Run the Azure query pack against a different database (cross-source)
+    $0 --database database/other-source-db --queries queries/azure-security
+
+    # Run multiple query packs against one database
+    $0 --database database/azure-api-db \\
+       --queries queries/azure-security \\
+       --queries queries/my-platform-security
+
+EOF
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Parse arguments
+# ---------------------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            usage
+            ;;
+        --source-config)
+            SOURCE_CONFIG="$2"
+            shift 2
+            ;;
+        --database)
+            DATABASE_PATH="$2"
+            shift 2
+            ;;
+        --queries)
+            QUERY_PACK_OVERRIDES+=("$2")
+            shift 2
+            ;;
+        --output-dir)
+            RESULTS_PATH="$2"
+            shift 2
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# Load source config
+# ---------------------------------------------------------------------------
+_cfg="${SOURCE_CONFIG:-$DEFAULT_SOURCE_CONFIG}"
+if [ -f "$_cfg" ]; then
+    # Read all needed fields in a single Python invocation to avoid opening
+    # the file three times
+    _cfg_fields=$(python3 -c "
+import json
+try:
+    with open('$_cfg') as f:
+        cfg = json.load(f)
+    db   = cfg.get('database_dir', '')
+    name = cfg.get('name', '')
+    packs = cfg.get('query_packs', [])
+    print(db)
+    print(name)
+    print('\n'.join(packs))
+except Exception:
+    print('')
+    print('')
+" 2>/dev/null || echo "")
+
+    _cfg_database=$(echo "$_cfg_fields" | sed -n '1p')
+    _cfg_source_name=$(echo "$_cfg_fields" | sed -n '2p')
+    _cfg_query_packs=$(echo "$_cfg_fields" | tail -n +3)
+else
+    echo -e "${YELLOW}Warning: source config not found: $_cfg — using built-in defaults${NC}"
+    _cfg_database="database/azure-api-db"
+    _cfg_query_packs="queries/azure-security"
+    _cfg_source_name="Azure REST API Specifications"
+fi
+
+# Apply config values when CLI flags were not provided
+if [ -z "$DATABASE_PATH" ]; then
+    DATABASE_PATH="${_cfg_database:-database/azure-api-db}"
+fi
+
+# Build the list of query packs to run
+if [ "${#QUERY_PACK_OVERRIDES[@]}" -gt 0 ]; then
+    # CLI --queries flags take full precedence
+    mapfile -t QUERY_PACKS < <(printf '%s\n' "${QUERY_PACK_OVERRIDES[@]}")
+elif [ -n "$_cfg_query_packs" ]; then
+    mapfile -t QUERY_PACKS < <(echo "$_cfg_query_packs")
+else
+    QUERY_PACKS=("queries/azure-security")
+fi
+
+SOURCE_NAME="${_cfg_source_name:-API Specifications}"
+
+# ---------------------------------------------------------------------------
 # Print banner
+# ---------------------------------------------------------------------------
 echo "═══════════════════════════════════════════════════════════"
 echo "  SpeQL - API Spec Query Analyser"
-echo "  Identifying security vulnerabilities in Azure REST API"
+echo "  Source  : $SOURCE_NAME"
+echo "  Database: $DATABASE_PATH"
+printf "  Packs   : %s\n" "${QUERY_PACKS[0]:-}"
+for _pack in "${QUERY_PACKS[@]:1}"; do
+    printf "            %s\n" "$_pack"
+done
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
+# ---------------------------------------------------------------------------
+# Pre-flight checks
+# ---------------------------------------------------------------------------
 # Check if CodeQL is installed
 if ! command -v codeql &> /dev/null; then
     echo -e "${RED}Error: CodeQL is not installed or not in PATH${NC}"
     echo "Please install CodeQL from: https://github.com/github/codeql-cli-binaries"
     exit 1
 fi
+
+# Check if database exists
+if [ ! -d "$DATABASE_PATH" ]; then
+    echo -e "${RED}Error: Database not found at $DATABASE_PATH${NC}"
+    exit 1
+fi
+
+# Check that every declared query pack directory exists
+for _pack in "${QUERY_PACKS[@]}"; do
+    if [ ! -d "$_pack" ]; then
+        echo -e "${RED}Error: Query pack directory not found: $_pack${NC}"
+        exit 1
+    fi
+done
 
 # Determine CodeQL search path for library resolution
 # NOTE: If you used 'codeql pack install' in queries/azure-security/, 
@@ -86,12 +246,6 @@ if [ -z "$SEARCH_PATH" ]; then
     echo -e "${YELLOW}See README.md for installation instructions.${NC}"
 fi
 
-# Check if database exists
-if [ ! -d "$DATABASE_PATH" ]; then
-    echo -e "${RED}Error: Database not found at $DATABASE_PATH${NC}"
-    exit 1
-fi
-
 # Dynamic Memory Management
 # Calculate memory limit based on database size (>50K JSON files)
 # Memory limit is set to 90% of total system memory when threshold is met
@@ -124,24 +278,29 @@ fi
 # Create results directory
 mkdir -p "$RESULTS_PATH"
 
-# List of queries to run
-QUERIES=(
-    "SasUriInResponse.ql"
-    "ExposedSasTokens.ql"
-    "ProxyAndDynamicInvocation.ql"
-    "MissingLogicAppSecureData.ql"
-    "HardcodedSecretsInArm.ql"
-    "SensitiveDataInGetResponse.ql"
-    "ControlPlaneBypass.ql"
-    "Base64EncodedSecrets.ql"
-)
+# ---------------------------------------------------------------------------
+# Discover all .ql files across every declared query pack
+# ---------------------------------------------------------------------------
+ALL_QUERIES=()
+for _pack in "${QUERY_PACKS[@]}"; do
+    while IFS= read -r -d '' _qfile; do
+        ALL_QUERIES+=("$_qfile")
+    done < <(find "$_pack" -name "*.ql" -print0 | sort -z)
+done
 
-echo -e "${GREEN}Running security queries...${NC}\n"
+if [ "${#ALL_QUERIES[@]}" -eq 0 ]; then
+    echo -e "${YELLOW}Warning: no .ql files found in the specified query packs.${NC}"
+    exit 0
+fi
 
+echo -e "${GREEN}Running ${#ALL_QUERIES[@]} security quer$([ "${#ALL_QUERIES[@]}" -eq 1 ] && echo y || echo ies) across ${#QUERY_PACKS[@]} pack$([ "${#QUERY_PACKS[@]}" -eq 1 ] && echo '' || echo s)...${NC}\n"
+
+# ---------------------------------------------------------------------------
 # Run each query
+# ---------------------------------------------------------------------------
 total_issues=0
-for query in "${QUERIES[@]}"; do
-    query_name=$(basename "$query" .ql)
+for query_file in "${ALL_QUERIES[@]}"; do
+    query_name=$(basename "$query_file" .ql)
     echo -e "${YELLOW}► Running: $query_name${NC}"
     
     output_file="$RESULTS_PATH/${query_name}-results.sarif"
@@ -158,7 +317,7 @@ for query in "${QUERIES[@]}"; do
     # only contain JSON files (the JS extractor treats them as empty JS).
     analyze_success=false
     if codeql database analyze "$DATABASE_PATH" \
-        "$QUERIES_PATH/$query" \
+        "$query_file" \
         --format=sarif-latest \
         --output="$output_file" \
         $SEARCH_PATH \
@@ -184,12 +343,12 @@ for query in "${QUERIES[@]}"; do
             --output="$bqrs_file" \
             $SEARCH_PATH \
             $MEMORY_OPTION \
-            "$QUERIES_PATH/$query" 2>>"$error_log"; then
+            "$query_file" 2>>"$error_log"; then
 
             # Get query metadata for SARIF interpretation
-            QUERY_ID=$(grep '@id' "$QUERIES_PATH/$query" | head -1 | sed 's/.*@id //')
-            QUERY_NAME=$(grep '@name' "$QUERIES_PATH/$query" | head -1 | sed 's/.*@name //')
-            QUERY_KIND=$(grep '@kind' "$QUERIES_PATH/$query" | head -1 | sed 's/.*@kind //')
+            QUERY_ID=$(grep '@id' "$query_file" | head -1 | sed 's/.*@id //')
+            QUERY_NAME=$(grep '@name' "$query_file" | head -1 | sed 's/.*@name //')
+            QUERY_KIND=$(grep '@kind' "$query_file" | head -1 | sed 's/.*@kind //')
 
             if codeql bqrs interpret \
                 --format=sarif-latest \
@@ -248,3 +407,4 @@ if [ "$total_issues" -gt 0 ]; then
 fi
 
 exit 0
+
