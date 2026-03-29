@@ -10,7 +10,7 @@ on:
       spec_scope:
         description: 'Subdirectory within azure-rest-api-specs to scan (default: specification/logic)'
         required: false
-        default: 'specification/logic'
+        default: 'specification'
 
 jobs:
   speql-security-scan:
