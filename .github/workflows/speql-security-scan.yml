@@ -64,10 +64,41 @@ jobs:
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
           bash run-queries.sh || true
 
+      - name: Run SARIF analysis scripts
+        if: always()
+        run: |
+          mkdir -p analysis-output
+          for sarif in results/*.sarif; do
+            [ -f "$sarif" ] || continue
+            name=$(basename "$sarif" .sarif)
+
+            bash scripts/sarif-analysis/parse-sarif-endpoints.sh \
+              -f csv -o "analysis-output/${name}-endpoints.csv" "$sarif" || true
+
+            bash scripts/sarif-analysis/prioritize-threats.sh \
+              -f markdown -o "analysis-output/${name}-threats.md" "$sarif" || true
+
+            bash scripts/sarif-analysis/deduplicate-by-product-operation.sh \
+              -f summary -o "analysis-output/${name}-deduplicated.txt" "$sarif" || true
+          done
+
+          # Consolidate all unique deduplicated patterns into a single file
+          if ls analysis-output/*-deduplicated.txt > /dev/null 2>&1; then
+            sort -u analysis-output/*-deduplicated.txt > analysis-output/all-unique-patterns.txt || true
+          fi
+
       - name: Upload query results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: speql-results-${{ github.run_id }}
           path: results/
+          retention-days: 30
+
+      - name: Upload SARIF analysis results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speql-sarif-analysis-${{ github.run_id }}
+          path: analysis-output/
           retention-days: 30
