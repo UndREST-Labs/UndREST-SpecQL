@@ -18,14 +18,14 @@ import javascript
 from JsonObject workflow, JsonObject action
 where
   // Identify actions that handle data but lack secureConfiguration
-  action = workflow.getPropValue("actions").getAnElement() and
+  action = workflow.getPropValue("actions").(JsonObject).getPropValue(_) and
   (
-    not action.hasProp("runtimeConfiguration") or
+    not exists(action.getPropValue("runtimeConfiguration")) or
     (
       action.getPropValue("runtimeConfiguration").getPropValue("secureData").getPropValue("properties") instanceof JsonArray and
       not (
-        action.getPropValue("runtimeConfiguration").getPropValue("secureData").getPropValue("properties").(JsonArray).getAnElement().getValue() = "inputs" and
-        action.getPropValue("runtimeConfiguration").getPropValue("secureData").getPropValue("properties").(JsonArray).getAnElement().getValue() = "outputs"
+        action.getPropValue("runtimeConfiguration").getPropValue("secureData").getPropValue("properties").(JsonArray).getElementValue(_).(JsonString).getValue() = "inputs" and
+        action.getPropValue("runtimeConfiguration").getPropValue("secureData").getPropValue("properties").(JsonArray).getElementValue(_).(JsonString).getValue() = "outputs"
       )
     )
   )

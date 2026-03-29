@@ -27,7 +27,7 @@ where
   // Flag schema properties explicitly defined as base64-encoded bytes
   (
     node instanceof JsonObject and
-    node.(JsonObject).getPropValue("format").getValue() = "byte" and
+    node.(JsonObject).getPropValue("format").(JsonString).getValue() = "byte" and
     message = "Schema property uses byte (base64) format — verify it does not expose a secret."
   )
 select node, message

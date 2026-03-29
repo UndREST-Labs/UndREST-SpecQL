@@ -31,8 +31,8 @@ where
   // Detect JSON objects modeling free-form HTTP requests (both method and path properties present)
   (
     node instanceof JsonObject and
-    node.(JsonObject).hasProp("method") and
-    node.(JsonObject).hasProp("path") and
+    exists(node.(JsonObject).getPropValue("method")) and
+    exists(node.(JsonObject).getPropValue("path")) and
     message = "Found JSON object with both 'method' and 'path' properties — possible free-form HTTP proxy schema."
   )
 select node, message
