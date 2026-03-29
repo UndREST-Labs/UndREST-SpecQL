@@ -59,19 +59,35 @@ python3 analyze.py
 ### What Do These Queries Detect?
 
 **Python Analyzer (analyze.py)** - Detects multiple vulnerability types in API schemas:
-- Insecure Logic App triggers (SilentReaper Pattern)
+- Insecure Logic App triggers (missing or weak authentication)
 - Key Vault misconfigurations (Azure Vault Recon)
 - Missing access control on API endpoints
 - Hardcoded credentials and secrets
 
-**CodeQL Query (SasUriInResponse.ql)** - Detects Azure SAS URIs in API example response files, the defining characteristic of SilentReaper vulnerabilities. A SilentReaper vulnerability occurs when an API emits a SAS URI in its response, which becomes dangerous with improper RBAC or inadequate control/data plane isolation.
+**CodeQL Queries (`run-queries.sh`)** - Detects security issues across all Azure REST API specs:
+
+1. **SasUriInResponse.ql** — Detects Azure SAS URIs in API example response files. A SilentReaper vulnerability occurs when an API emits a SAS URI in its response, which becomes dangerous with improper RBAC or inadequate control/data plane isolation.
+2. **ExposedSasTokens.ql** — Detects pre-authenticated SAS URIs or tokens found in example payloads or JSON strings that contain sensitive signature material (`sig`, `sv`).
+3. **ProxyAndDynamicInvocation.ql** — Identifies "bridge" endpoints in management-plane specs that allow callers to proxy arbitrary requests to backend services.
+4. **MissingLogicAppSecureData.ql** — Detects Logic App workflow definitions where sensitive inputs or outputs are not secured via `runtimeConfiguration.secureData`.
+5. **HardcodedSecretsInArm.ql** — Detects ARM template parameters typed as `securestring` that include a plaintext default value.
+6. **SensitiveDataInGetResponse.ql** — Flags GET operations that return credential-named properties (keys, tokens, secrets) not annotated with `x-ms-secret: true`.
+7. **ControlPlaneBypass.ql** — Scans data-plane specs for resource management operations that should be restricted to the management plane.
+8. **Base64EncodedSecrets.ql** — Searches for high-entropy strings or fields formatted as base64-encoded bytes that may mask obfuscated secrets.
 
 ### Query Output
 
-The CodeQL query produces SARIF format output in the `results/` directory:
+The CodeQL queries produce SARIF format output in the `results/` directory:
 ```bash
 results/
-  └── SasUriInResponse-results.sarif
+  ├── SasUriInResponse-results.sarif
+  ├── ExposedSasTokens-results.sarif
+  ├── ProxyAndDynamicInvocation-results.sarif
+  ├── MissingLogicAppSecureData-results.sarif
+  ├── HardcodedSecretsInArm-results.sarif
+  ├── SensitiveDataInGetResponse-results.sarif
+  ├── ControlPlaneBypass-results.sarif
+  └── Base64EncodedSecrets-results.sarif
 ```
 
 ## Troubleshooting

@@ -79,11 +79,10 @@ The database path matters for CodeQL! Build it with the specifications you want 
 ### Python Analyzer (analyze.py)
 The Python analyzer detects the following vulnerability types in API schema files:
 
-### 1. SilentReaper Vulnerability Patterns
+### 1. Insecure Logic App Trigger Patterns
 **Issue**: Logic App triggers without proper authentication
 **Risk**: Unauthorized workflow execution
 **Example**: HTTP triggers with missing or weak authentication
-**Definition**: A SilentReaper vulnerability is characterized by APIs emitting SAS URIs in responses, especially dangerous with improper RBAC or inadequate control/data plane isolation
 
 ### 2. Azure Vault Recon Vulnerabilities
 **Issue**: Key Vault misconfigurations
@@ -100,14 +99,48 @@ The Python analyzer detects the following vulnerability types in API schema file
 **Risk**: Credential exposure and theft
 **Example**: Connection strings with embedded passwords
 
-### CodeQL Query (SasUriInResponse.ql)
+### CodeQL Queries (run-queries.sh)
 
-### 5. SAS URI Exposure - SilentReaper Vulnerability Indicator
+### 5. SAS URI Exposure (`SasUriInResponse.ql`) — SilentReaper Vulnerability Indicator
 **Issue**: Azure SAS tokens exposed in API example responses
 **Risk**: Unauthorized data-plane access and data exfiltration
 **Example**: Response URIs containing signature parameters (sig, se, sp)
-**SilentReaper Definition**: When an API emits a SAS URI in its response, creating danger with improper RBAC or inadequate control/data plane isolation
 **Note**: This query scans API example files where actual SAS URIs appear, not schema definitions
+
+### 6. Exposed SAS Tokens (`ExposedSasTokens.ql`)
+**Issue**: Pre-authenticated SAS URIs or tokens in example payloads
+**Risk**: Unauthorized access to Azure resources via leaked signature material
+**Example**: JSON strings containing `sig=` and `sv=` parameters
+
+### 7. Proxy and Dynamic Invocation (`ProxyAndDynamicInvocation.ql`)
+**Issue**: Bridge endpoints in management-plane specs enabling arbitrary proxying
+**Risk**: Unauthorized cross-service access bypassing intended isolation
+**Example**: Management APIs with backend proxy affordances
+
+### 8. Missing Logic App Secure Data (`MissingLogicAppSecureData.ql`)
+**Issue**: Logic App workflows without `runtimeConfiguration.secureData`
+**Risk**: Secrets exposed in run history and execution logs
+**Example**: Logic App actions passing credentials without secure data settings
+
+### 9. Hardcoded Secrets in ARM (`HardcodedSecretsInArm.ql`)
+**Issue**: ARM `securestring` parameters with plaintext default values
+**Risk**: Credentials stored in cleartext in deployment logs and template history
+**Example**: `"defaultValue": "MyPassword123"` on a securestring parameter
+
+### 10. Sensitive Data in GET Response (`SensitiveDataInGetResponse.ql`)
+**Issue**: GET operations returning credential properties without `x-ms-secret: true`
+**Risk**: Unintended exposure of secrets, keys, or tokens via read operations
+**Example**: GET response schema with `password`, `key`, or `token` properties
+
+### 11. Control-Plane Bypass (`ControlPlaneBypass.ql`)
+**Issue**: Resource management operations exposed on data-plane paths
+**Risk**: Unauthorized resource lifecycle control bypassing management-plane controls
+**Example**: Data-plane specs defining deployment or account creation endpoints
+
+### 12. Base64-Encoded Secrets (`Base64EncodedSecrets.ql`)
+**Issue**: High-entropy or base64-encoded strings that may mask obfuscated secrets
+**Risk**: Credential exposure hidden by encoding
+**Example**: Fields explicitly typed as base64-encoded bytes in API examples or schemas
 
 ## 📊 Understanding the Output
 
@@ -152,7 +185,7 @@ python3 analyze.py || exit 1
 
 ### CodeQL Analysis (requires CodeQL CLI)
 ```bash
-# Run CodeQL query for SAS URI detection
+# Run all security queries
 ./run-queries.sh
 
 # Run specific query

@@ -4,7 +4,7 @@
 
 # UndREST-SpecQL — API Spec Query Engine
 
-**SpeQL** is an API Spec Query Analyser that uses CodeQL and a built-in Python analyzer to scan Azure REST API specifications for security vulnerabilities — including SilentReaper patterns, Key Vault misconfigurations, missing access control, and exposed credentials.
+**SpeQL** is an API Spec Query Analyser that uses CodeQL and a built-in Python analyzer to scan Azure REST API specifications for security vulnerabilities — including SAS URI exposure, Key Vault misconfigurations, missing access control, and exposed credentials.
 
 SpeQL is the engine that feeds **[APISpy](https://github.com/UndREST-Labs/UndREST-APISpy)** — it exports a structured index of every Azure REST API operation, which APISpy uses for real-time request classification in the browser.
 
@@ -70,15 +70,15 @@ python3 refresh_database.py # Update database
 | Tool | Entry Point | Description |
 |------|-------------|-------------|
 | **Interactive CLI** | `SpeQL.py` | Menu-driven interface for all SpeQL actions |
-| **Python Security Analyzer** | `analyze.py` | Standalone scanner; no CodeQL required; detects SilentReaper, Key Vault misconfigs, missing access control, hardcoded credentials |
-| **CodeQL Query** | `queries/azure-security/SasUriInResponse.ql` | Detects Azure SAS tokens exposed in API example responses — the defining characteristic of SilentReaper vulnerabilities |
+| **Python Security Analyzer** | `analyze.py` | Standalone scanner; no CodeQL required; detects insecure Logic App triggers, Key Vault misconfigs, missing access control, hardcoded credentials |
+| **CodeQL Queries** | `queries/azure-security/` | 8 queries detecting SAS URI exposure, exposed tokens, proxy invocation, Logic App secrets, hardcoded ARM secrets, sensitive GET responses, control-plane bypass, and obfuscated secrets |
 | **Database Refresh** | `refresh-database.sh` · `refresh_database.py` | Clone and build a CodeQL database from the Azure REST API spec corpus |
 | **SARIF Analysis Tools** | `scripts/sarif-analysis/` | Shell scripts for deduplicating, parsing, and prioritising CodeQL findings |
 | **Export Pipeline** | `scripts/export/export_api_inventory.py` | Walks the spec corpus and produces a structured JSON index of every Azure REST API operation, published to APISpy via GitHub Releases |
 
 ## Vulnerabilities Detected
 
-### 1. Insecure Logic App Trigger (SilentReaper Pattern)
+### 1. Insecure Logic App Trigger
 
 Detects Logic App HTTP triggers that can be invoked without authentication:
 - Missing authentication configuration
@@ -123,9 +123,51 @@ The CodeQL query (`SasUriInResponse.ql`) detects Azure Shared Access Signature (
 - URIs containing signature parameters (`sig`, `se`, `sp`, `sv`)
 - Control-plane APIs exposing data-plane access credentials
 
-**Security Impact**: SAS URIs grant time-limited access to Azure resources. When exposed in control-plane API responses with improper RBAC or inadequate control/data plane isolation, they can enable unauthorised data-plane access and data exfiltration.
+**Security Impact**: SAS URIs grant time-limited access to Azure resources. When exposed in control-plane API responses with improper RBAC or inadequate control/data plane isolation, they can enable unauthorised data-plane access and data exfiltration. This is the defining characteristic of a SilentReaper vulnerability.
 
 **CWE References**: CWE-200 (Exposure of Sensitive Information), CWE-359
+
+### 6. Exposed SAS Tokens (CodeQL)
+
+The CodeQL query (`ExposedSasTokens.ql`) detects pre-authenticated SAS URIs or tokens in example payloads or JSON strings containing signature material (`sig`, `sv`).
+
+**CWE References**: CWE-200, CWE-522
+
+### 7. Proxy and Dynamic Invocation (CodeQL)
+
+The CodeQL query (`ProxyAndDynamicInvocation.ql`) identifies bridge endpoints in management-plane specs that allow callers to proxy arbitrary requests to backend services, bypassing intended isolation.
+
+**CWE References**: CWE-441, CWE-610
+
+### 8. Missing Logic App Secure Data (CodeQL)
+
+The CodeQL query (`MissingLogicAppSecureData.ql`) detects Logic App workflow definitions where sensitive inputs or outputs are not secured via `runtimeConfiguration.secureData`.
+
+**CWE References**: CWE-312, CWE-532
+
+### 9. Hardcoded Secrets in ARM Templates (CodeQL)
+
+The CodeQL query (`HardcodedSecretsInArm.ql`) detects ARM template parameters typed as `securestring` that include a plaintext default value.
+
+**CWE References**: CWE-312, CWE-798
+
+### 10. Sensitive Data in GET Responses (CodeQL)
+
+The CodeQL query (`SensitiveDataInGetResponse.ql`) flags GET operations that return credential-named properties without `x-ms-secret: true`.
+
+**CWE References**: CWE-200, CWE-359
+
+### 11. Control-Plane Bypass (CodeQL)
+
+The CodeQL query (`ControlPlaneBypass.ql`) scans data-plane specs for resource management operations that should be restricted to the management plane.
+
+**CWE References**: CWE-284, CWE-269
+
+### 12. Base64-Encoded Secrets (CodeQL)
+
+The CodeQL query (`Base64EncodedSecrets.ql`) searches for high-entropy or base64-encoded strings that may mask obfuscated secrets in API examples or schema definitions.
+
+**CWE References**: CWE-312, CWE-522
 
 ## Repository Structure
 
@@ -162,7 +204,14 @@ UndREST-SpecQL/
 │   └── api-index-sharded-<run-id>.zip
 ├── queries/
 │   └── azure-security/
-│       ├── SasUriInResponse.ql # Detects SAS URIs in API example responses
+│       ├── SasUriInResponse.ql          # Detects SAS URIs in API example responses
+│       ├── ExposedSasTokens.ql          # Detects pre-authenticated SAS tokens in example payloads
+│       ├── ProxyAndDynamicInvocation.ql # Identifies bridge endpoints enabling cross-service access
+│       ├── MissingLogicAppSecureData.ql # Detects Logic App workflows without secure data settings
+│       ├── HardcodedSecretsInArm.ql     # Detects securestring ARM params with plaintext defaults
+│       ├── SensitiveDataInGetResponse.ql # Flags GET responses returning unprotected credential properties
+│       ├── ControlPlaneBypass.ql        # Detects management ops exposed on data-plane paths
+│       ├── Base64EncodedSecrets.ql      # Detects obfuscated secrets encoded as base64
 │       └── qlpack.yml
 ├── results/                    # Analysis results (generated)
 ├── scripts/
@@ -348,7 +397,91 @@ See [docs/inventory/EXPORT_PIPELINE.md](docs/inventory/EXPORT_PIPELINE.md) for t
 | **Precision** | High |
 | **CWE** | CWE-200, CWE-359 |
 
-Detects API specs that emit Azure Shared Access Signature (SAS) URIs in API responses. SAS URIs contain sensitive tokens granting time-limited access to Azure resources.
+Detects API specs that emit Azure Shared Access Signature (SAS) URIs in API responses. SAS URIs contain sensitive tokens granting time-limited access to Azure resources. This is the defining characteristic of a SilentReaper vulnerability — an API emitting a SAS URI in its response, which becomes dangerous with improper RBAC or inadequate control/data plane isolation.
+
+### ExposedSasTokens.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/exposed-sas-tokens` |
+| **Severity** | Error |
+| **Security Severity** | 8.5 |
+| **Precision** | High |
+| **CWE** | CWE-200, CWE-522 |
+
+Detects pre-authenticated SAS URIs or tokens found in example payloads or JSON strings. These contain sensitive signature material (`sig`, `sv`) along with scope or expiry parameters that, if exposed, can grant unauthorized access to Azure resources.
+
+### ProxyAndDynamicInvocation.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/proxy-dynamic-invocation` |
+| **Severity** | Warning |
+| **Security Severity** | 7.5 |
+| **Precision** | Medium |
+| **CWE** | CWE-441, CWE-610 |
+
+Identifies "bridge" endpoints in management-plane specs that allow callers to proxy arbitrary requests to backend services, potentially bypassing intended isolation and enabling unauthorized cross-service access.
+
+### MissingLogicAppSecureData.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/missing-logic-app-secure-data` |
+| **Severity** | Error |
+| **Security Severity** | 7.0 |
+| **Precision** | Medium |
+| **CWE** | CWE-312, CWE-532 |
+
+Detects Logic App workflow definitions where sensitive inputs or outputs are not secured via `runtimeConfiguration.secureData`, potentially exposing secrets in run history and execution logs.
+
+### HardcodedSecretsInArm.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/hardcoded-secrets-arm` |
+| **Severity** | Error |
+| **Security Severity** | 9.0 |
+| **Precision** | High |
+| **CWE** | CWE-312, CWE-798 |
+
+Detects ARM template parameters typed as `securestring` that inadvertently include a plaintext default value. Such defaults are stored in cleartext in deployment logs and template history, defeating the purpose of the secure type.
+
+### SensitiveDataInGetResponse.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/sensitive-data-in-get-response` |
+| **Severity** | Error |
+| **Security Severity** | 8.0 |
+| **Precision** | Medium |
+| **CWE** | CWE-200, CWE-359 |
+
+Flags GET operations that return properties whose names suggest credentials (keys, tokens, secrets, passwords, connection strings) but are not annotated with the mandatory `x-ms-secret: true` extension, risking unintended exposure of sensitive data.
+
+### ControlPlaneBypass.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/control-plane-bypass` |
+| **Severity** | Warning |
+| **Security Severity** | 7.0 |
+| **Precision** | Low |
+| **CWE** | CWE-284, CWE-269 |
+
+Scans data-plane specifications for resource management operations (e.g., creating deployments, accounts, or configurations) that should typically be restricted to the management plane. Such paths may enable unauthorized resource lifecycle control.
+
+### Base64EncodedSecrets.ql
+
+| Attribute | Value |
+|-----------|-------|
+| **ID** | `azure/base64-encoded-secret` |
+| **Severity** | Warning |
+| **Security Severity** | 6.5 |
+| **Precision** | Low |
+| **CWE** | CWE-312, CWE-522 |
+
+Searches for high-entropy strings or fields explicitly formatted as base64-encoded bytes that may mask obfuscated secrets within API examples or schema definitions.
 
 ## Ecosystem
 
