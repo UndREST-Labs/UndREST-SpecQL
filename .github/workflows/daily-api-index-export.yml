@@ -7,8 +7,12 @@ on:
 
   workflow_dispatch:
     inputs:
+      source_config:
+        description: 'Path to source config JSON (default: config/sources/azure.json)'
+        required: false
+        default: 'config/sources/azure.json'
       spec_scope:
-        description: 'Subdirectory within azure-rest-api-specs to export (default: specification)'
+        description: 'Subdirectory within the specs repo to export (default: specification)'
         required: false
         default: 'specification'
 
@@ -31,16 +35,33 @@ jobs:
         run: |
           pip install pyfiglet pytest
 
-      - name: Clone / update azure-rest-api-specs
+      - name: Resolve source config
+        id: source
         run: |
-          python3 refresh_database.py --all --skip-db-build
+          SOURCE_CONFIG="${{ github.event.inputs.source_config || 'config/sources/azure.json' }}"
+          echo "config=${SOURCE_CONFIG}" >> "$GITHUB_OUTPUT"
+          SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
+          SOURCE_REPO=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_repo','unknown'))")
+          SOURCE_BRANCH=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_branch','main'))")
+          echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
+          echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
+          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone / update spec repository
+        run: |
+          python3 refresh_database.py \
+            --source-config "${{ steps.source.outputs.config }}" \
+            --all \
+            --skip-db-build
 
       - name: Run API inventory export
         run: |
           SCOPE="${{ github.event.inputs.spec_scope || 'specification' }}"
           python3 scripts/export/export_api_inventory.py \
-            --source "azure-rest-api-specs/${SCOPE}" \
+            --source "${{ steps.source.outputs.specs_dir }}/${SCOPE}" \
             --output-dir inventory/ \
+            --source-repo "${{ steps.source.outputs.source_repo }}" \
+            --source-branch "${{ steps.source.outputs.source_branch }}" \
             --grouped \
             --minified \
             --verbose
@@ -58,3 +79,4 @@ jobs:
           name: api-index-${{ github.run_id }}
           path: inventory/
           retention-days: 30
+

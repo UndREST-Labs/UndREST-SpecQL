@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
 SpeQL Database Refresh Script
-Refreshes the CodeQL database from Azure REST API specifications
+Refreshes the CodeQL database from a configured API spec source.
+
+By default it uses the Azure REST API specifications, but any source can be
+specified via --source-config.  Source definitions live in config/sources/ as
+JSON files (e.g. config/sources/azure.json).
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -24,12 +29,45 @@ YELLOW = '\033[1;33m'
 BLUE = '\033[0;34m'
 NC = '\033[0m'  # No Color
 
-# Configuration
-AZURE_REPO_URL = "https://github.com/Azure/azure-rest-api-specs.git"
-SPECS_DIR = "azure-rest-api-specs"
-DATABASE_DIR = "database/azure-api-db"
+# ---------------------------------------------------------------------------
+# Default source configuration (Azure) — overridden by --source-config
+# ---------------------------------------------------------------------------
+_DEFAULT_SOURCE_CONFIG = Path(__file__).parent / "config" / "sources" / "azure.json"
+
+_FALLBACK_SOURCE = {
+    "id": "azure",
+    "name": "Azure REST API Specifications",
+    "repo_url": "https://github.com/Azure/azure-rest-api-specs.git",
+    "specs_dir": "azure-rest-api-specs",
+    "database_dir": "database/azure-api-db",
+    "default_spec_path": "specification/logic",
+    "source_repo": "Azure/azure-rest-api-specs",
+    "source_branch": "main",
+}
+
 CONFIG_FILE = "config/SpeQL.yml"
-DEFAULT_SPEC_PATH = "specification/logic"
+
+
+def _load_source_config(config_path: Optional[str]) -> dict:
+    """Load a source config JSON file.  Falls back to the built-in Azure config."""
+    path = Path(config_path) if config_path else _DEFAULT_SOURCE_CONFIG
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        if not isinstance(cfg, dict):
+            raise ValueError("Source config must be a JSON object")
+        return cfg
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"{YELLOW}[WARNING]{NC} Could not load source config '{path}': {exc}")
+        print(f"{YELLOW}[WARNING]{NC} Falling back to built-in Azure defaults")
+        return dict(_FALLBACK_SOURCE)
+
+
+# These module-level names are kept for backward compatibility with code that
+# imports them directly.  They are set after argument parsing in main().
+SPECS_DIR: str = _FALLBACK_SOURCE["specs_dir"]
+DATABASE_DIR: str = _FALLBACK_SOURCE["database_dir"]
+DEFAULT_SPEC_PATH: str = _FALLBACK_SOURCE["default_spec_path"]
 
 
 def print_info(message: str):
@@ -120,73 +158,93 @@ def check_prerequisites(skip_codeql: bool = False) -> bool:
     return True
 
 
-def manage_azure_repo(fresh: bool, branch: str, spec_path: str, include_all: bool) -> bool:
-    """Clone or update Azure REST API specs repository"""
-    print_info("Managing Azure REST API specs repository...")
-    
-    specs_path = Path(SPECS_DIR)
-    
+def manage_source_repo(
+    repo_url: str,
+    specs_dir: str,
+    fresh: bool,
+    branch: str,
+    spec_path: str,
+    include_all: bool,
+) -> bool:
+    """Clone or update an API spec source repository."""
+    print_info(f"Managing spec repository: {repo_url}")
+
+    specs_path = Path(specs_dir)
+
     # Handle fresh clone
     if fresh and specs_path.exists():
-        print_warning("Removing existing Azure repo for fresh clone...")
+        print_warning(f"Removing existing repo directory '{specs_dir}' for fresh clone...")
         shutil.rmtree(specs_path)
-    
+
     # Update existing repo
     if (specs_path / ".git").exists():
-        print_info("Updating existing Azure REST API specs...")
-        
+        print_info(f"Updating existing spec repository in '{specs_dir}'...")
+
         # Fetch latest
-        success, _ = run_command(["git", "fetch", "origin", branch], cwd=SPECS_DIR)
+        success, _ = run_command(["git", "fetch", "origin", branch], cwd=specs_dir)
         if not success:
             print_error("Failed to fetch from remote")
             return False
-        
+
         # Reset to latest
-        success, _ = run_command(["git", "reset", "--hard", f"origin/{branch}"], cwd=SPECS_DIR)
+        success, _ = run_command(["git", "reset", "--hard", f"origin/{branch}"], cwd=specs_dir)
         if not success:
             print_error("Failed to reset to latest version")
             return False
-        
+
         # Clean untracked files
-        run_command(["git", "clean", "-fdx"], cwd=SPECS_DIR)
-        
+        run_command(["git", "clean", "-fdx"], cwd=specs_dir)
+
         print_success("Repository updated to latest version")
     else:
-        print_info("Cloning Azure REST API specs (this may take a few minutes)...")
-        
+        print_info("Cloning spec repository (this may take a few minutes)...")
+
         if include_all:
             # Full clone with depth 1
             success, _ = run_command([
                 "git", "clone", "--depth", "1", "--branch", branch,
-                AZURE_REPO_URL, SPECS_DIR
+                repo_url, specs_dir,
             ])
         else:
             # Sparse checkout for specific path
             success, _ = run_command([
                 "git", "clone", "--depth", "1", "--branch", branch,
                 "--filter=blob:none", "--sparse",
-                AZURE_REPO_URL, SPECS_DIR
+                repo_url, specs_dir,
             ])
-            
+
             if success:
                 success, _ = run_command(
                     ["git", "sparse-checkout", "set", spec_path],
-                    cwd=SPECS_DIR
+                    cwd=specs_dir,
                 )
-        
+
         if not success:
             print_error("Failed to clone repository")
             return False
-        
+
         print_success("Repository cloned successfully")
-    
+
     # Display stats
     spec_full_path = specs_path / spec_path
     if spec_full_path.exists():
         json_files = list(spec_full_path.rglob("*.json"))
         print_info(f"Found {len(json_files)} JSON files in {spec_path}")
-    
+
     return True
+
+
+# Backward-compatible alias
+def manage_azure_repo(fresh: bool, branch: str, spec_path: str, include_all: bool) -> bool:
+    """Clone or update Azure REST API specs repository (backward-compatible wrapper)."""
+    return manage_source_repo(
+        repo_url=_FALLBACK_SOURCE["repo_url"],
+        specs_dir=SPECS_DIR,
+        fresh=fresh,
+        branch=branch,
+        spec_path=spec_path,
+        include_all=include_all,
+    )
 
 
 def _finalize_json_database(db_path: Path) -> None:
@@ -247,18 +305,30 @@ def _finalize_json_database(db_path: Path) -> None:
     print_success("Database finalized (CodeQL 2.23+ JSON-only compatibility mode)")
 
 
-def build_codeql_database(spec_path: str, clean: bool) -> bool:
-    """Build CodeQL database from specs"""
+def build_codeql_database(spec_path: str, clean: bool, specs_dir: str = "", database_dir: str = "") -> bool:
+    """Build CodeQL database from specs.
+
+    Args:
+        spec_path:    Subdirectory within *specs_dir* to index.
+        clean:        Whether to remove any pre-existing database first.
+        specs_dir:    Root directory of the cloned spec repository.
+                      Defaults to the module-level ``SPECS_DIR`` value.
+        database_dir: Where to write the CodeQL database.
+                      Defaults to the module-level ``DATABASE_DIR`` value.
+    """
     print_info("Building CodeQL database...")
-    
-    db_path = Path(DATABASE_DIR)
-    source_path = Path(SPECS_DIR) / spec_path
-    
+
+    _specs_dir = specs_dir or SPECS_DIR
+    _database_dir = database_dir or DATABASE_DIR
+
+    db_path = Path(_database_dir)
+    source_path = Path(_specs_dir) / spec_path
+
     # Check source path
     if not source_path.exists():
         print_error(f"Source path does not exist: {source_path}")
         return False
-    
+
     # Remove old database (either for clean rebuild or normal overwrite)
     if db_path.exists():
         if clean:
@@ -266,23 +336,23 @@ def build_codeql_database(spec_path: str, clean: bool) -> bool:
         else:
             print_info("Removing old database...")
         shutil.rmtree(db_path)
-    
+
     # Ensure parent directory exists (Git doesn't track empty directories)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Create database
     print_info(f"Creating CodeQL database from {source_path}...")
     # Use --codescanning-config to specify which files to index (JSON files)
     # The warning "Only found JavaScript or TypeScript files that were empty..." is expected
     # but harmless - the JSON files are still indexed correctly
     success, output = run_command([
-        "codeql", "database", "create", DATABASE_DIR,
+        "codeql", "database", "create", _database_dir,
         "--language=javascript",
         f"--source-root={source_path}",
         f"--codescanning-config={CONFIG_FILE}",
-        "--overwrite"
+        "--overwrite",
     ])
-    
+
     if not success:
         # CodeQL 2.23+ exits non-zero for JSON-only databases ("Only found JavaScript or
         # TypeScript files that were empty or contained syntax errors"), but TRAP files
@@ -296,9 +366,9 @@ def build_codeql_database(spec_path: str, clean: bool) -> bool:
             print_error("Failed to create CodeQL database")
             print_info("Check output for details")
             return False
-    
+
     print_success("CodeQL database created successfully")
-    
+
     # Create src.zip for analyze.py compatibility
     print_info("Creating src.zip for analyzer compatibility...")
     src_dir = db_path / "src"
@@ -311,28 +381,34 @@ def build_codeql_database(spec_path: str, clean: bool) -> bool:
                     arcname = file_path.relative_to(src_dir.parent)
                     zipf.write(file_path, arcname)
         print_success("Created src.zip")
-    
+
     # Display database info
     print_info("Database information:")
-    run_command(["codeql", "database", "info", DATABASE_DIR])
-    
+    run_command(["codeql", "database", "info", _database_dir])
+
     return True
 
 
-def verify_database() -> bool:
-    """Verify database integrity"""
+def verify_database(database_dir: str = "") -> bool:
+    """Verify database integrity.
+
+    Args:
+        database_dir: Path to the CodeQL database directory.
+                      Defaults to the module-level ``DATABASE_DIR`` value.
+    """
     print_info("Verifying database...")
-    
-    db_path = Path(DATABASE_DIR)
-    
+
+    _database_dir = database_dir or DATABASE_DIR
+    db_path = Path(_database_dir)
+
     if not db_path.exists():
-        print_error(f"Database directory does not exist: {DATABASE_DIR}")
+        print_error(f"Database directory does not exist: {_database_dir}")
         return False
-    
+
     if not (db_path / "codeql-database.yml").exists():
         print_error("Database appears to be invalid (missing codeql-database.yml)")
         return False
-    
+
     # Check src.zip for analyze.py compatibility
     src_zip = db_path / "src.zip"
     src_dir = db_path / "src"
@@ -344,7 +420,7 @@ def verify_database() -> bool:
                 if file_path.is_file():
                     arcname = file_path.relative_to(src_dir.parent)
                     zipf.write(file_path, arcname)
-    
+
     print_success("Database verification complete")
     return True
 
@@ -352,51 +428,65 @@ def verify_database() -> bool:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Refresh the SpeQL CodeQL database from Azure REST API specifications",
+        description="Refresh the SpeQL CodeQL database from an API spec source",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Update repo and rebuild database (default Logic Apps specs)
+  # Update repo and rebuild database (default: Azure Logic Apps specs)
   %(prog)s
+
+  # Use a custom source definition
+  %(prog)s --source-config config/sources/azure.json
 
   # Fresh clone and rebuild
   %(prog)s --fresh
 
-  # Build database for Key Vault specs
+  # Build database for a specific spec path within the source
   %(prog)s --path specification/keyvault
 
-  # Build database for all Azure specs
+  # Build database for all specs in the source
   %(prog)s --all
 
   # Just update the repo without rebuilding database
   %(prog)s --update --skip-db-build
         """
     )
-    
+
+    parser.add_argument(
+        '--source-config',
+        default=None,
+        metavar='PATH',
+        help=(
+            'Path to a source config JSON file (default: config/sources/azure.json). '
+            'Source config files live in config/sources/ and define the repository URL, '
+            'specs directory, database directory, and other source-specific settings. '
+            'See docs/ADDING_API_SOURCES.md for how to create a new source config.'
+        ),
+    )
     parser.add_argument(
         '-f', '--fresh',
         action='store_true',
-        help='Perform a fresh clone of the Azure repo (removes existing)'
+        help='Perform a fresh clone of the source repo (removes existing directory)'
     )
     parser.add_argument(
         '-u', '--update',
         action='store_true',
-        help='Update existing Azure repo clone (default)'
+        help='Update existing repo clone (default)'
     )
     parser.add_argument(
         '-p', '--path',
-        default=DEFAULT_SPEC_PATH,
-        help=f'Specify Azure spec path to include (default: {DEFAULT_SPEC_PATH})'
+        default=None,
+        help='Spec subdirectory to include (overrides source config default_spec_path)'
     )
     parser.add_argument(
         '-a', '--all',
         action='store_true',
-        help='Include all Azure specifications'
+        help='Include all specifications in the source (uses the top-level spec root)'
     )
     parser.add_argument(
         '-b', '--branch',
-        default='main',
-        help='Specify branch to use (default: main)'
+        default=None,
+        help='Branch to use (overrides source config source_branch; default: main)'
     )
     parser.add_argument(
         '--skip-db-build',
@@ -408,42 +498,70 @@ Examples:
         action='store_true',
         help='Clean existing database before rebuild'
     )
-    
+
     args = parser.parse_args()
-    
-    # Adjust spec path for --all
-    spec_path = "specification" if args.all else args.path
-    
+
+    # Load source config
+    cfg = _load_source_config(args.source_config)
+
+    # Apply source config values as defaults (CLI args take precedence)
+    source_name = cfg.get("name", "API Specifications")
+    repo_url = cfg.get("repo_url", _FALLBACK_SOURCE["repo_url"])
+    specs_dir = cfg.get("specs_dir", _FALLBACK_SOURCE["specs_dir"])
+    database_dir = cfg.get("database_dir", _FALLBACK_SOURCE["database_dir"])
+    default_spec_path = cfg.get("default_spec_path", _FALLBACK_SOURCE["default_spec_path"])
+    branch = args.branch or cfg.get("source_branch", "main")
+
+    # Derive final spec path
+    if args.all:
+        # --all walks the entire spec root; for Azure that is "specification/"
+        # For other sources the root may differ — use the parent of default_spec_path
+        spec_root = str(Path(default_spec_path).parts[0]) if default_spec_path else "specification"
+        spec_path = spec_root
+    else:
+        spec_path = args.path or default_spec_path
+
+    # Update module-level globals so that helper functions that still reference
+    # them (e.g. build_codeql_database called without explicit args) work correctly.
+    global SPECS_DIR, DATABASE_DIR, DEFAULT_SPEC_PATH
+    SPECS_DIR = specs_dir
+    DATABASE_DIR = database_dir
+    DEFAULT_SPEC_PATH = default_spec_path
+
     # Print header
     print("╔════════════════════════════════════════════════════════════╗")
     print("║         SpeQL - Database Refresh Utility                  ║")
-    print("║    Building from Azure REST API Specifications            ║")
+    print(f"║  Source: {source_name[:50]:<50}║")
     print("╚════════════════════════════════════════════════════════════╝")
     print()
-    
+
     print_info("Configuration:")
+    print(f"  - Source: {source_name}")
+    print(f"  - Repository: {repo_url}")
+    print(f"  - Specs directory: {specs_dir}")
+    print(f"  - Database directory: {database_dir}")
     print(f"  - Specification path: {spec_path}")
-    print(f"  - Branch: {args.branch}")
+    print(f"  - Branch: {branch}")
     print(f"  - Fresh clone: {args.fresh}")
     print(f"  - Skip DB build: {args.skip_db_build}")
     print()
-    
+
     # Check prerequisites
     if not check_prerequisites(skip_codeql=args.skip_db_build):
         sys.exit(1)
-    
-    # Manage Azure repo
-    if not manage_azure_repo(args.fresh, args.branch, spec_path, args.all):
+
+    # Manage source repo
+    if not manage_source_repo(repo_url, specs_dir, args.fresh, branch, spec_path, args.all):
         sys.exit(1)
-    
+
     # Build database if not skipped
     if not args.skip_db_build:
-        if not build_codeql_database(spec_path, args.clean):
+        if not build_codeql_database(spec_path, args.clean, specs_dir, database_dir):
             sys.exit(1)
-        
-        if not verify_database():
+
+        if not verify_database(database_dir):
             sys.exit(1)
-        
+
         print()
         print_success("Database refresh complete!")
         print()

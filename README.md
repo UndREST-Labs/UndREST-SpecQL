@@ -16,6 +16,7 @@ SpeQL is the engine that feeds **[APISpy](https://github.com/UndREST-Labs/UndRES
 - [Tools Overview](#tools-overview)
 - [Vulnerabilities Detected](#vulnerabilities-detected)
 - [Repository Structure](#repository-structure)
+- [Multi-Source Architecture](#multi-source-architecture)
 - [Smart Memory Management](#smart-memory-management)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -178,16 +179,19 @@ UndREST-SpecQL/
 ├── LICENSE
 ├── SpeQL.py                     # Interactive CLI menu entry point
 ├── setup.sh                     # Automated setup script
-├── refresh-database.sh          # Bash script to refresh database
-├── refresh_database.py          # Python script to refresh database
+├── refresh-database.sh          # Bash script to refresh/clone a spec source and build the DB
+├── refresh_database.py          # Python script (same, cross-platform)
 ├── analyze.py                   # Python-based security analyzer (no CodeQL required)
 ├── run-queries.sh               # CodeQL query execution script
 ├── config/
-│   └── SpeQL.yml               # CodeQL database configuration
-├── database/                   # CodeQL database (generated)
+│   ├── SpeQL.yml               # CodeQL database configuration
+│   └── sources/                # Source registry — one JSON file per API spec source
+│       └── azure.json          # Azure REST API Specifications source definition
+├── database/                   # CodeQL database(s) (generated)
 │   └── azure-api-db/
 ├── demos/                      # Demo GIFs (01–07)
 ├── docs/                       # Documentation
+│   ├── ADDING_API_SOURCES.md   # Guide for adding new API spec sources
 │   ├── CODEQL_WORKFLOW.md
 │   ├── DATABASE_REFRESH.md
 │   ├── EXAMPLE_OUTPUT.md
@@ -202,7 +206,8 @@ UndREST-SpecQL/
 │       └── EXPORT_PIPELINE.md
 ├── inventory/                  # Export artifacts (generated)
 │   └── api-index-sharded-<run-id>.zip
-├── queries/
+├── queries/                    # CodeQL queries — one subdirectory per platform
+│   ├── README.md               # How to add queries for a new platform
 │   └── azure-security/
 │       ├── SasUriInResponse.ql          # Detects SAS URIs in API example responses
 │       ├── ExposedSasTokens.ql          # Detects pre-authenticated SAS tokens in example payloads
@@ -233,7 +238,30 @@ UndREST-SpecQL/
     └── memory_utils.sh         # Memory management utilities
 ```
 
-## Smart Memory Management
+## Multi-Source Architecture
+
+SpeQL is designed to work with any OpenAPI/Swagger spec corpus, not just
+`azure-rest-api-specs`.  Adding support for a new API platform requires only:
+
+1. **A source config file** (`config/sources/<platform>.json`) — declares the
+   upstream repository URL, local directory names, and metadata.
+2. **Optionally, platform-specific CodeQL queries** (`queries/<platform>-security/`).
+
+All scripts and workflows accept a `--source-config` flag:
+
+```bash
+# Refresh using a custom source
+python3 refresh_database.py --source-config config/sources/my-platform.json --all --skip-db-build
+
+# Export API inventory for a custom source
+python3 scripts/export/export_api_inventory.py \
+  --source my-platform-api-specs/specification \
+  --source-repo MyOrg/my-platform-api-specs
+```
+
+See [docs/ADDING_API_SOURCES.md](docs/ADDING_API_SOURCES.md) for the complete guide.
+
+
 
 SpeQL includes intelligent memory management for CodeQL query execution.
 
@@ -345,16 +373,19 @@ See [scripts/sarif-analysis/README.md](scripts/sarif-analysis/README.md) for ful
 ## Database Management
 
 ```bash
-# Update and rebuild (default: Logic Apps)
+# Update and rebuild (default: Azure Logic Apps)
 ./refresh-database.sh
+
+# Use a specific source config
+./refresh-database.sh --source-config config/sources/azure.json
 
 # Fresh clone
 ./refresh-database.sh --fresh
 
-# Specific service
+# Specific service path within the source
 ./refresh-database.sh --path specification/keyvault
 
-# All Azure specifications
+# All specifications in the source
 ./refresh-database.sh --all
 
 # Repo only (no CodeQL build)
@@ -364,14 +395,23 @@ See [scripts/sarif-analysis/README.md](scripts/sarif-analysis/README.md) for ful
 ![Database Refresh Demo](demos/02-database-refresh.gif)
 
 For full documentation, see [docs/DATABASE_REFRESH.md](docs/DATABASE_REFRESH.md).
+To add a new API source, see [docs/ADDING_API_SOURCES.md](docs/ADDING_API_SOURCES.md).
 
 ## Export Pipeline
 
-The export pipeline walks `azure-rest-api-specs/specification/` and produces a structured JSON index of every Azure REST API operation.
+The export pipeline walks any OpenAPI/Swagger spec directory and produces a structured JSON index of every REST API operation.
 
 ```bash
+# Azure (default)
 python3 scripts/export/export_api_inventory.py \
   --source azure-rest-api-specs/specification \
+  --output-dir inventory/ \
+  --sharded --minified --verbose
+
+# Custom source
+python3 scripts/export/export_api_inventory.py \
+  --source my-platform-api-specs/specification \
+  --source-repo MyOrg/my-platform-api-specs \
   --output-dir inventory/ \
   --sharded --minified --verbose
 ```

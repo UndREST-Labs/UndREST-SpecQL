@@ -7,7 +7,10 @@ if [ -z "${CODEQL_ALLOW_INSTALLATION_ANYWHERE:-}" ]; then
 fi
 
 # SpeQL Database Refresh Script
-# This script clones/updates Azure REST API specs and rebuilds the CodeQL database
+# Clones/updates an API spec source repository and rebuilds the CodeQL database.
+# The source repository and related paths are driven by a JSON source config file
+# (default: config/sources/azure.json).  Pass --source-config to use a different
+# source — see docs/ADDING_API_SOURCES.md for how to create one.
 
 # Color codes for output
 RED='\033[0;31m'
@@ -16,12 +19,38 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-AZURE_REPO_URL="https://github.com/Azure/azure-rest-api-specs.git"
-SPECS_DIR="azure-rest-api-specs"
-DATABASE_DIR="database/azure-api-db"
+# ---------------------------------------------------------------------------
+# Helper: read a field from a JSON source config using Python (no jq needed)
+# ---------------------------------------------------------------------------
+_json_field() {
+    local file="$1"
+    local field="$2"
+    local default="$3"
+    python3 -c "
+import json
+import sys
+try:
+    cfg = json.load(open('$file'))
+    print(cfg.get('$field', '$default'))
+except Exception:
+    print('$default')
+"
+}
+
+# ---------------------------------------------------------------------------
+# Default source config
+# ---------------------------------------------------------------------------
+DEFAULT_SOURCE_CONFIG="config/sources/azure.json"
+SOURCE_CONFIG=""
+
+# These will be populated after parsing --source-config
+REPO_URL=""
+SPECS_DIR=""
+DATABASE_DIR=""
+DEFAULT_SPEC_PATH=""
+SOURCE_NAME=""
+
 CONFIG_FILE="config/SpeQL.yml"
-DEFAULT_SPEC_PATH="specification/logic"
 
 # Function to print colored messages
 print_info() {
@@ -45,35 +74,39 @@ usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Refresh the SpeQL CodeQL database from Azure REST API specifications.
+Refresh the SpeQL CodeQL database from an API spec source.
 
 OPTIONS:
-    -h, --help              Show this help message
-    -f, --fresh             Perform a fresh clone of the Azure repo (removes existing)
-    -u, --update            Update existing Azure repo clone (default)
-    -p, --path PATH         Specify Azure spec path to include (default: $DEFAULT_SPEC_PATH)
-                            Examples: specification/logic
-                                     specification/keyvault
-                                     specification/compute
-    -a, --all               Include all Azure specifications
-    -b, --branch BRANCH     Specify branch to use (default: main)
-    --skip-db-build         Skip CodeQL database build (only clone/update repo)
-    --clean                 Clean existing database before rebuild
+    -h, --help                  Show this help message
+        --source-config PATH    Path to a source config JSON file
+                                (default: $DEFAULT_SOURCE_CONFIG)
+                                See docs/ADDING_API_SOURCES.md for the format.
+    -f, --fresh                 Perform a fresh clone (removes existing directory)
+    -u, --update                Update existing repo clone (default)
+    -p, --path PATH             Spec subdirectory to include
+                                (overrides source config default_spec_path)
+    -a, --all                   Include all specifications in the source
+    -b, --branch BRANCH         Branch to use (overrides source config source_branch)
+        --skip-db-build         Skip CodeQL database build (only clone/update repo)
+        --clean                 Clean existing database before rebuild
 
 EXAMPLES:
-    # Update repo and rebuild database (default Logic Apps specs)
+    # Update repo and rebuild database (default: Azure, Logic Apps specs)
     $0
+
+    # Use a custom source definition
+    $0 --source-config config/sources/azure.json
 
     # Fresh clone and rebuild
     $0 --fresh
 
-    # Build database for Key Vault specs
+    # Build database for a specific spec path within the source
     $0 --path specification/keyvault
 
-    # Build database for all Azure specs
+    # Build database for all specs in the source
     $0 --all
 
-    # Just update the repo without rebuilding database
+    # Just update the repo without rebuilding the database
     $0 --update --skip-db-build
 
 EOF
@@ -87,6 +120,12 @@ check_prerequisites() {
     # Check for git
     if ! command -v git &> /dev/null; then
         print_error "git is not installed. Please install git first."
+        exit 1
+    fi
+    
+    # Check for python3 (required for source config parsing)
+    if ! command -v python3 &> /dev/null; then
+        print_error "python3 is not installed. Please install Python 3 first."
         exit 1
     fi
     
@@ -128,17 +167,38 @@ check_prerequisites() {
     print_success "Prerequisites check complete"
 }
 
-# Function to clone or update Azure repo
-manage_azure_repo() {
-    print_info "Managing Azure REST API specs repository..."
+# Function to load source config
+load_source_config() {
+    local cfg_file="${SOURCE_CONFIG:-$DEFAULT_SOURCE_CONFIG}"
+    if [ ! -f "$cfg_file" ]; then
+        print_warning "Source config not found: $cfg_file — using built-in Azure defaults"
+        REPO_URL="https://github.com/Azure/azure-rest-api-specs.git"
+        SPECS_DIR="azure-rest-api-specs"
+        DATABASE_DIR="database/azure-api-db"
+        DEFAULT_SPEC_PATH="specification/logic"
+        SOURCE_NAME="Azure REST API Specifications"
+        return
+    fi
+
+    REPO_URL=$(_json_field "$cfg_file" "repo_url" "https://github.com/Azure/azure-rest-api-specs.git")
+    SPECS_DIR=$(_json_field "$cfg_file" "specs_dir" "azure-rest-api-specs")
+    DATABASE_DIR=$(_json_field "$cfg_file" "database_dir" "database/azure-api-db")
+    DEFAULT_SPEC_PATH=$(_json_field "$cfg_file" "default_spec_path" "specification/logic")
+    SOURCE_NAME=$(_json_field "$cfg_file" "name" "API Specifications")
+    print_info "Loaded source config: $cfg_file ($SOURCE_NAME)"
+}
+
+# Function to clone or update the source repo
+manage_source_repo() {
+    print_info "Managing spec repository: $REPO_URL"
     
     if [ "$FRESH_CLONE" = true ] && [ -d "$SPECS_DIR" ]; then
-        print_warning "Removing existing Azure repo for fresh clone..."
+        print_warning "Removing existing directory '$SPECS_DIR' for fresh clone..."
         rm -rf "$SPECS_DIR"
     fi
     
     if [ -d "$SPECS_DIR/.git" ]; then
-        print_info "Updating existing Azure REST API specs..."
+        print_info "Updating existing spec repository in '$SPECS_DIR'..."
         cd "$SPECS_DIR"
         
         # Fetch latest changes
@@ -153,14 +213,14 @@ manage_azure_repo() {
         cd ..
         print_success "Repository updated to latest version"
     else
-        print_info "Cloning Azure REST API specs (this may take a few minutes)..."
+        print_info "Cloning spec repository (this may take a few minutes)..."
         
         # Clone with depth to speed up
         if [ "$INCLUDE_ALL" = true ]; then
-            git clone --depth 1 --branch "$BRANCH" "$AZURE_REPO_URL" "$SPECS_DIR"
+            git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$SPECS_DIR"
         else
             # Sparse checkout for specific paths
-            git clone --depth 1 --branch "$BRANCH" --filter=blob:none --sparse "$AZURE_REPO_URL" "$SPECS_DIR"
+            git clone --depth 1 --branch "$BRANCH" --filter=blob:none --sparse "$REPO_URL" "$SPECS_DIR"
             cd "$SPECS_DIR"
             git sparse-checkout set "$SPEC_PATH"
             cd ..
@@ -266,9 +326,9 @@ verify_database() {
 # Parse command line arguments
 FRESH_CLONE=false
 UPDATE_REPO=true
-SPEC_PATH="$DEFAULT_SPEC_PATH"
+SPEC_PATH_OVERRIDE=""
 INCLUDE_ALL=false
-BRANCH="main"
+BRANCH_OVERRIDE=""
 SKIP_DB_BUILD=false
 CLEAN_DB=false
 
@@ -276,6 +336,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
             usage
+            ;;
+        --source-config)
+            SOURCE_CONFIG="$2"
+            shift 2
             ;;
         -f|--fresh)
             FRESH_CLONE=true
@@ -286,16 +350,15 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -p|--path)
-            SPEC_PATH="$2"
+            SPEC_PATH_OVERRIDE="$2"
             shift 2
             ;;
         -a|--all)
             INCLUDE_ALL=true
-            SPEC_PATH="specification"
             shift
             ;;
         -b|--branch)
-            BRANCH="$2"
+            BRANCH_OVERRIDE="$2"
             shift 2
             ;;
         --skip-db-build)
@@ -314,15 +377,38 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Load source config (sets REPO_URL, SPECS_DIR, DATABASE_DIR, DEFAULT_SPEC_PATH, SOURCE_NAME)
+load_source_config
+
+# Apply overrides from CLI flags
+BRANCH="${BRANCH_OVERRIDE:-$(_json_field "${SOURCE_CONFIG:-$DEFAULT_SOURCE_CONFIG}" source_branch main)}"
+
+if [ "$INCLUDE_ALL" = true ]; then
+    # Use the top-level spec root directory from default_spec_path
+    SPEC_PATH=$(python3 -c "
+from pathlib import Path
+d = '$DEFAULT_SPEC_PATH'
+print(Path(d).parts[0] if d else 'specification')
+" 2>/dev/null || echo "specification")
+elif [ -n "$SPEC_PATH_OVERRIDE" ]; then
+    SPEC_PATH="$SPEC_PATH_OVERRIDE"
+else
+    SPEC_PATH="$DEFAULT_SPEC_PATH"
+fi
+
 # Main execution
 main() {
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║         SpeQL - Database Refresh Utility                  ║"
-    echo "║    Building from Azure REST API Specifications            ║"
+    printf "║  Source: %-50s║\n" "$SOURCE_NAME"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
     
     print_info "Configuration:"
+    echo "  - Source: $SOURCE_NAME"
+    echo "  - Repository: $REPO_URL"
+    echo "  - Specs directory: $SPECS_DIR"
+    echo "  - Database directory: $DATABASE_DIR"
     echo "  - Specification path: $SPEC_PATH"
     echo "  - Branch: $BRANCH"
     echo "  - Fresh clone: $FRESH_CLONE"
@@ -332,8 +418,8 @@ main() {
     # Check prerequisites
     check_prerequisites
     
-    # Manage Azure repo
-    manage_azure_repo
+    # Manage source repo
+    manage_source_repo
     
     # Build database if not skipped
     if [ "$SKIP_DB_BUILD" = false ]; then
@@ -357,3 +443,4 @@ main() {
 
 # Run main function
 main
+

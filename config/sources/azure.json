@@ -1,0 +1,10 @@
+{
+  "id": "azure",
+  "name": "Azure REST API Specifications",
+  "repo_url": "https://github.com/Azure/azure-rest-api-specs.git",
+  "specs_dir": "azure-rest-api-specs",
+  "database_dir": "database/azure-api-db",
+  "default_spec_path": "specification/logic",
+  "source_repo": "Azure/azure-rest-api-specs",
+  "source_branch": "main"
+}
