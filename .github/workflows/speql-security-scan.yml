@@ -81,7 +81,7 @@ jobs:
       - name: Run SpeQL security queries
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
-          bash run-queries.sh || true
+          bash run-queries.sh --source-config "${{ steps.source.outputs.config }}" || true
 
       - name: Run SARIF analysis scripts
         if: always()
