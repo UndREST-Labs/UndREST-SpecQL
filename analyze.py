@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SpeQL - API Spec Query Analyser for Azure REST API
-Analyzes Azure REST API specifications to identify potential SilentReaper vulnerabilities
+Analyzes Azure REST API specifications to identify potential security vulnerabilities
 """
 
 import json
@@ -62,7 +62,7 @@ class AzureSecurityAnalyzer:
         self._check_insecure_credentials(file_path, content)
     
     def _check_logic_app_triggers(self, file_path: str, content: Dict[str, Any]):
-        """Check for insecure Logic App trigger configurations (SilentReaper Pattern)"""
+        """Check for insecure Logic App trigger configurations"""
         # Check workflow definitions
         if "definition" in content:
             definition = content.get("definition", {})
@@ -79,7 +79,7 @@ class AzureSecurityAnalyzer:
                     if "authentication" not in inputs:
                         self.issues.append(SecurityIssue(
                             "error",
-                            "Insecure Logic App Trigger (SilentReaper Pattern)",
+                            "Insecure Logic App Trigger",
                             f"HTTP trigger '{trigger_name}' is missing authentication configuration, allowing unauthorized access",
                             file_path,
                             f"triggers.{trigger_name}"
@@ -431,7 +431,7 @@ def main():
     
     print("═" * 60)
     print("  SpeQL - API Spec Query Analyser")
-    print("  Identifying SilentReaper vulnerabilities in Azure REST API")
+    print("  Identifying security vulnerabilities in Azure REST API")
     print("═" * 60)
     print()
     

@@ -10,7 +10,7 @@ The Python analyzer (analyze.py) detects security vulnerabilities in API schema 
 $ python3 analyze.py
 ════════════════════════════════════════════════════════════
   SpeQL - API Spec Query Analyser
-  Identifying SilentReaper vulnerabilities in Azure REST API
+  Identifying security vulnerabilities in Azure REST API
 ════════════════════════════════════════════════════════════
 
 Analyzing 309 JSON files...

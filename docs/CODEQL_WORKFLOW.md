@@ -65,6 +65,13 @@ After building the database, run your queries:
 
 This runs:
 - SasUriInResponse.ql (detects SAS URIs in API example responses)
+- ExposedSasTokens.ql (detects pre-authenticated SAS tokens in example payloads)
+- ProxyAndDynamicInvocation.ql (identifies bridge endpoints enabling cross-service access)
+- MissingLogicAppSecureData.ql (detects Logic App workflows without secure data settings)
+- HardcodedSecretsInArm.ql (detects securestring ARM parameters with plaintext defaults)
+- SensitiveDataInGetResponse.ql (flags GET responses returning unprotected credential properties)
+- ControlPlaneBypass.ql (detects management operations exposed on data-plane paths)
+- Base64EncodedSecrets.ql (detects high-entropy or base64-encoded secrets in API specs)
 
 #### Run Custom Query
 ```bash
