@@ -33,7 +33,7 @@ jobs:
 
       - name: Install CodeQL CLI
         run: |
-          CODEQL_VERSION="v2.20.7"
+          CODEQL_VERSION="v2.25.1"
           curl -fsSL \
             "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
             -o /tmp/codeql.zip
