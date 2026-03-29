@@ -125,10 +125,15 @@ fi
 mkdir -p "$RESULTS_PATH"
 
 # List of queries to run
-# Note: Only SasUriInResponse is included as it's the only query that benefits from
-# scanning API example outputs. Other security checks are better performed using analyze.py.
 QUERIES=(
     "SasUriInResponse.ql"
+    "ExposedSasTokens.ql"
+    "ProxyAndDynamicInvocation.ql"
+    "MissingLogicAppSecureData.ql"
+    "HardcodedSecretsInArm.ql"
+    "SensitiveDataInGetResponse.ql"
+    "ControlPlaneBypass.ql"
+    "Base64EncodedSecrets.ql"
 )
 
 echo -e "${GREEN}Running security queries...${NC}\n"

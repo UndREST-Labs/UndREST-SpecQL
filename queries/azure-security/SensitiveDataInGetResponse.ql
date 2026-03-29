@@ -1,0 +1,30 @@
+/**
+ * @name Sensitive Data Exposure in GET Responses
+ * @description Flags GET operations that return properties whose names suggest credentials (keys,
+ *              tokens, secrets, passwords, connection strings) but are not annotated with the
+ *              mandatory x-ms-secret: true extension, risking unintended exposure of sensitive data.
+ * @kind problem
+ * @problem.severity error
+ * @security-severity 8.0
+ * @precision medium
+ * @id azure/sensitive-data-in-get-response
+ * @tags security
+ *       external/cwe/cwe-200
+ *       external/cwe/cwe-359
+ */
+
+import javascript
+
+from JsonObject prop, JsonObject response
+where
+  // Identify properties in response schemas that look like credentials
+  (
+    prop.getName().matches("%key%") or
+    prop.getName().matches("%secret%") or
+    prop.getName().matches("%token%") or
+    prop.getName().matches("%password%") or
+    prop.getName().matches("%connectionString%")
+  ) and
+  // Flag those missing the x-ms-secret annotation in a GET response
+  not prop.getPropValue("x-ms-secret").getValue() = "true"
+select prop, "Sensitive property found in GET response schema without x-ms-secret: true annotation."
