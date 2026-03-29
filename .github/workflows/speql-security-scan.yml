@@ -1,0 +1,73 @@
+name: SpeQL Security Scan
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: '0 6 * * *'
+
+  workflow_dispatch:
+    inputs:
+      spec_scope:
+        description: 'Subdirectory within azure-rest-api-specs to scan (default: specification/logic)'
+        required: false
+        default: 'specification/logic'
+
+jobs:
+  speql-security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout UndREST-SpecQL
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyfiglet pytest
+
+      - name: Install CodeQL CLI
+        run: |
+          CODEQL_VERSION="v2.20.7"
+          curl -fsSL \
+            "https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip" \
+            -o /tmp/codeql.zip
+          unzip -q /tmp/codeql.zip -d /tmp/codeql-dist
+          echo "/tmp/codeql-dist/codeql" >> "$GITHUB_PATH"
+
+      - name: Install CodeQL JavaScript pack
+        run: |
+          export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
+          codeql pack install queries/azure-security/
+
+      - name: Clone / update azure-rest-api-specs
+        run: |
+          python3 refresh_database.py --all --skip-db-build
+
+      - name: Create CodeQL database
+        run: |
+          export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
+          SCOPE="${{ github.event.inputs.spec_scope || 'specification/logic' }}"
+          mkdir -p database
+          codeql database create database/azure-api-db \
+            --language=javascript \
+            --source-root="azure-rest-api-specs/${SCOPE}" \
+            --overwrite
+
+      - name: Run SpeQL security queries
+        run: |
+          export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
+          bash run-queries.sh || true
+
+      - name: Upload query results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speql-results-${{ github.run_id }}
+          path: results/
+          retention-days: 30
