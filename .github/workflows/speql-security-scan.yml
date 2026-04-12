@@ -112,7 +112,7 @@ jobs:
         with:
           name: speql-results-${{ github.run_id }}
           path: results/
-          retention-days: 30
+          retention-days: 2
 
       - name: Upload SARIF analysis results
         if: always()
@@ -120,5 +120,5 @@ jobs:
         with:
           name: speql-sarif-analysis-${{ github.run_id }}
           path: analysis-output/
-          retention-days: 30
+          retention-days: 2
 
