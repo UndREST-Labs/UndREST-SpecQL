@@ -116,5 +116,5 @@ jobs:
         with:
           name: api-index-sharded-${{ github.run_id }}
           path: inventory/
-          retention-days: 30
+          retention-days: 2
 
