@@ -14,6 +14,21 @@ For **APISpy** (browser extension, portal sweep, shard preparation), see [UndRES
 4. **Improve documentation**
 5. **Report bugs or suggest features**
 
+## 🤖 Agent Governance (cARL)
+
+This repository uses [cARL](https://github.com/goldjg/cARL) for AI coding agent governance. Before starting any agent-assisted task:
+
+1. Read `.github/carl/memory.md` — it captures SpecQL's architecture, test commands, security constraints, and generated-artefact boundaries.
+2. Check `.github/carl/current-pr-contract.md` — it defines the approved scope, forbidden changes, and stop conditions for the active PR.
+
+Key rules for agents and contributors:
+- **CodeQL CLI must be pinned to 2.20.1 or 2.20.2.** 2.23.x+ breaks JSON-only database builds.
+- **Do not commit** `database/`, `results/`, `azure-rest-api-specs/`, or generated inventory JSON files.
+- **Lightweight tests** (no CodeQL/DB required): `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
+- **requirements.txt** lists only `pyfiglet`. Install `pytest` separately for testing.
+
+Run `carl doctor` to verify governance health at any time.
+
 ## 🔧 Development Setup
 
 ### Prerequisites
