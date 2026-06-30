@@ -535,6 +535,32 @@ SpeQL is part of the [UndREST Labs](https://github.com/UndREST-Labs) ecosystem:
 
 > **Observe → Understand → Map → Evolve**
 
+## Agent Governance (cARL)
+
+This repository uses [cARL](https://github.com/goldjg/cARL) — a version-controlled governance layer for AI coding agents. cARL artefacts are committed under `.github/carl/` and provide:
+
+- **Durable memory** — `.github/carl/memory.md` captures SpecQL's architecture, security invariants, and canonical test commands so future agent sessions start with full context.
+- **PR contracts** — `.github/carl/current-pr-contract.md` constrains each PR's approved scope, forbidden changes, and stop conditions.
+- **Instruction packs** — `.github/instructions/` packs load per-language and per-domain governance (Python, Azure, CI/CD, security) automatically into every Copilot agent session.
+
+### cARL quick reference for contributors
+
+```bash
+# Install the cARL CLI (Linux amd64)
+curl -L https://github.com/goldjg/cARL/releases/download/v0.4.2/carl_0.4.2_linux_amd64.tar.gz | tar xz && sudo mv carl /usr/local/bin/carl
+
+# Verify installation
+carl version
+
+# Check runtime health
+carl doctor
+
+# Repair drifted artefacts (never overwrites memory.md)
+carl repair
+```
+
+> **AI agents working in this repo:** hydrate `.github/carl/memory.md` before planning. Do not change product code, query logic, or generated artefacts unless explicitly within the active PR contract.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding new security queries, improving existing ones, and contributing to the export pipeline.
