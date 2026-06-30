@@ -27,6 +27,8 @@ Key rules for agents and contributors:
 - **Lightweight tests** (no CodeQL/DB required): `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
 - **requirements.txt** lists only `pyfiglet`. Install `pytest` separately for testing.
 
+To install the cARL CLI, see [https://github.com/goldjg/cARL/releases/latest](https://github.com/goldjg/cARL/releases/latest) for the latest release and platform-specific instructions, or follow the [cARL QuickStart](https://github.com/goldjg/cARL#quickstart). Then from the repo root: `carl init`.
+
 Run `carl doctor` to verify governance health at any time.
 
 ## 🔧 Development Setup

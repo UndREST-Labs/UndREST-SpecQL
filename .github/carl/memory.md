@@ -124,10 +124,10 @@ requires a package, document it explicitly rather than silently adding.
 
 ## cARL installation
 
-- cARL CLI v0.4.2 installed; `carl init` ran on 2026-06-30 (37 artefacts).
+- Initial install: cARL CLI v0.4.2 used to run `carl init` on 2026-06-30 (37 artefacts).
 - Runtime version: 1.0.0 from goldjg/cARL @ v1.0.0.
 - `carl doctor` reports: healthy.
-- Install CLI: `curl -L https://github.com/goldjg/cARL/releases/download/v0.4.2/carl_0.4.2_linux_amd64.tar.gz | tar xz && sudo mv carl /usr/local/bin/carl`
+- **Ongoing install guidance:** Always install the latest CLI release from https://github.com/goldjg/cARL/releases/latest. See the [cARL QuickStart](https://github.com/goldjg/cARL#quickstart) for platform-specific instructions. Do not hardcode v0.4.2 for new installs.
 - Then from repo root: `carl init`
 
 ## Core invariants
