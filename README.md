@@ -320,6 +320,13 @@ codeql version
 pip3 install -r requirements.txt
 ```
 
+#### Lightweight tests (no CodeQL/DB required)
+
+```bash
+pip3 install pytest
+python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v
+```
+
 ## Usage
 
 ### Python Analyzer
