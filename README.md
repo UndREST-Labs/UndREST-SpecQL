@@ -320,7 +320,7 @@ codeql version
 pip3 install -r requirements.txt
 ```
 
-#### 4. Lightweight tests (no CodeQL/DB required)
+#### Lightweight tests (no CodeQL/DB required)
 
 ```bash
 pip3 install pytest
