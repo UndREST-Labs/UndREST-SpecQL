@@ -1,0 +1,33 @@
+name: Lightweight Export Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lightweight-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime dependencies
+        run: pip3 install -r requirements.txt
+
+      - name: Install pytest
+        run: pip3 install pytest
+
+      - name: Run lightweight tests
+        run: python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v

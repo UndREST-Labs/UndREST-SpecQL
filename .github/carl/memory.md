@@ -78,6 +78,7 @@ Published to UndREST-APISpy via GitHub Releases.
 
 | Workflow | Schedule | Purpose |
 |---|---|---|
+| `lightweight-tests.yml` | PRs, pushes to `main`, manual | Install runtime deps + pytest, run lightweight export/normalization unit tests (no CodeQL/DB/spec clone) |
 | `speql-security-scan.yml` | Daily 06:00 UTC | Clone specs, build DB, run CodeQL queries, upload SARIF |
 | `daily-api-index-export.yml` | Daily 04:00 UTC | Clone specs, export flat + grouped + sharded JSON index |
 | `daily-api-index-export-sharded.yml` | Daily | Sharded export variant |
