@@ -23,7 +23,7 @@ This repository uses [cARL](https://github.com/goldjg/cARL) for AI coding agent 
 
 Key rules for agents and contributors:
 - **CodeQL CLI must be pinned to 2.20.1 or 2.20.2.** 2.23.x+ breaks JSON-only database builds.
-- **Do not commit** `database/`, `results/`, `azure-rest-api-specs/`, or generated inventory JSON files.
+- **Do not commit** `database/`, `results/`, `azure-rest-api-specs/`, or generated inventory exports (`inventory/*.json`, `inventory/shards/`, packaged inventory ZIPs).
 - **Lightweight tests** (no CodeQL/DB required): `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
 - **requirements.txt** lists only `pyfiglet`. Install `pytest` separately for testing.
 

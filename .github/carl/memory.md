@@ -51,7 +51,7 @@ SpeQL is a Python + CodeQL analysis pipeline targeting Azure REST API JSON specs
 |---|---|---|
 | `database/` | Generated; not committed | Built by refresh scripts from azure-rest-api-specs |
 | `results/` | Generated; gitignored | SARIF output from CodeQL queries |
-| `inventory/` | Generated; `.json`/`.min.json` gitignored | Exported API index artefacts |
+| `inventory/` | Generated; only `.gitkeep` tracked | Exported API index artefacts (`.json`, `.min.json`, `shards/`, and packaged `.zip` outputs are gitignored) |
 | `azure-rest-api-specs/` | Cloned externally; gitignored | Source spec corpus managed by refresh scripts |
 | `queries/azure-security/` | Committed | CodeQL query pack with `qlpack.yml` |
 | `config/sources/` | Committed | One JSON per spec source (currently `azure.json`) |
@@ -71,6 +71,7 @@ Adding a new source requires only a source config JSON and optionally a platform
 - `api-index-grouped.json` — nested by provider/host/route (with `--grouped`)
 - `shards/<provider>.json` — per-provider shards (with `--sharded`)
 - Minified variants (`*.min.json`) with `--minified`
+- Packaged sharded export ZIPs for release publication
 
 Published to UndREST-APISpy via GitHub Releases.
 
@@ -133,7 +134,7 @@ requires a package, document it explicitly rather than silently adding.
 
 ## Core invariants
 
-- Do not commit database/, results/, azure-rest-api-specs/, or generated inventory JSON files.
+- Do not commit database/, results/, azure-rest-api-specs/, or generated inventory exports (JSON, shards, or packaged ZIPs).
 - Always pin CodeQL CLI to 2.20.1 or 2.20.2 in setup, docs, and CI.
 - requirements.txt lists only runtime-required Python packages; test tools (pytest) are documented separately.
 - Export pipeline output is deterministic given the same spec corpus input.
