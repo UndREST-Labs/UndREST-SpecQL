@@ -546,8 +546,11 @@ This repository uses [cARL](https://github.com/goldjg/cARL) — a version-contro
 ### cARL quick reference for contributors
 
 ```bash
-# Install the cARL CLI (Linux amd64)
-curl -L https://github.com/goldjg/cARL/releases/download/v0.4.2/carl_0.4.2_linux_amd64.tar.gz | tar xz && sudo mv carl /usr/local/bin/carl
+# Install the cARL CLI
+# Latest release and platform-specific install instructions:
+#   https://github.com/goldjg/cARL/releases/latest
+# QuickStart (Linux, macOS, Windows):
+#   https://github.com/goldjg/cARL#quickstart
 
 # Verify installation
 carl version

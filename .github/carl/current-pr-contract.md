@@ -11,10 +11,10 @@ PR constraints are historical evidence unless they are explicitly
 promoted to durable invariants.
 
 ## Goal
-Install cARL governance runtime into UndREST-SpecQL and establish durable
-agent governance artefacts so that future coding agents operate with
-persistent architectural memory, scoped PR contracts, and consistent
-engineering discipline.
+Normalise cARL contributor install guidance after the initial cARL runtime install.
+Replace hardcoded v0.4.2 install command with pointers to the latest releases page and
+cARL README QuickStart. Preserve v0.4.2 factual installation evidence in memory.md but
+distinguish it from ongoing install guidance.
 
 ## Contract status
 active
