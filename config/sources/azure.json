@@ -9,6 +9,9 @@
   "source_repo": "Azure/azure-rest-api-specs",
   "source_branch": "main",
   "publish_to_apispy": true,
+  "apispy_pack_id": "azure-rest-api-specs",
+  "apispy_pack_name": "Azure REST API Specs",
+  "apispy_platform": "azure",
   "query_packs": [
     "queries/azure-security"
   ]

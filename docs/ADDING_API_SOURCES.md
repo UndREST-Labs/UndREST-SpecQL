@@ -60,6 +60,9 @@ Source configs live in `config/sources/` and follow this schema:
 | `default_spec_path` | Yes | — | Default subdirectory within `specs_dir` to index |
 | `export_spec_path` | No | `default_spec_path` | Default export scope; use this to preserve a narrower interactive/database default |
 | `publish_to_apispy` | No | `false` | Allow the sharded workflow to replace the shared APISpy release and dispatch an update |
+| `apispy_pack_id` | No | source `id` | APISpy manifest pack ID sent with publication dispatches |
+| `apispy_pack_name` | No | source `name` | APISpy display name sent with publication dispatches |
+| `apispy_platform` | No | source `id` | APISpy platform identifier sent with publication dispatches |
 | `source_repo` | No | `"unknown"` | `org/repo` identifier recorded in export metadata |
 | `source_branch` | No | `"main"` | Branch name recorded in export metadata |
 | `source_commit` | No | branch head | Exact full commit SHA to fetch, check out detached, and verify for reproducible acquisition |

@@ -92,12 +92,16 @@ class TestImport:
         assert config["source_commit"] == "b8cbef92f6959dca8150bf3edcc650863765e529"
         assert config["export_profile"] == "microsoft-graph"
         assert config["export_spec_path"] == "openapi"
+        assert config["publish_to_apispy"] is False
+        assert config["apispy_pack_id"] == "microsoft-graph"
 
     def test_registered_azure_source_preserves_full_export_scope(self):
         config_path = Path(__file__).parent.parent / "config" / "sources" / "azure.json"
         config = exp._load_export_source_config(config_path)
         assert config["default_spec_path"] == "specification/logic"
         assert config["export_spec_path"] == "specification"
+        assert config["publish_to_apispy"] is True
+        assert config["apispy_pack_id"] == "azure-rest-api-specs"
 
 
 # ---------------------------------------------------------------------------

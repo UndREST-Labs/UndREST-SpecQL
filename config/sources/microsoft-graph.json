@@ -10,6 +10,9 @@
   "source_branch": "master",
   "source_commit": "b8cbef92f6959dca8150bf3edcc650863765e529",
   "publish_to_apispy": false,
+  "apispy_pack_id": "microsoft-graph",
+  "apispy_pack_name": "Microsoft Graph",
+  "apispy_platform": "microsoft-graph",
   "export_profile": "microsoft-graph",
   "query_packs": []
 }

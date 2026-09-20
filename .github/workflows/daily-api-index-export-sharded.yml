@@ -48,13 +48,17 @@ jobs:
           SOURCE_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('id','unknown'))")
           SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
           SOURCE_REPO=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_repo','unknown'))")
-          SOURCE_NAME=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('name', cfg.get('id','unknown')))")
           PUBLISH_TO_APISPY=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(str(bool(cfg.get('publish_to_apispy', False))).lower())")
+          APISPY_PACK_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_pack_id', cfg.get('id','unknown')))")
+          APISPY_PACK_NAME=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_pack_name', cfg.get('name', cfg.get('id','unknown'))))")
+          APISPY_PLATFORM=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_platform', cfg.get('id','unknown')))")
           echo "source_id=${SOURCE_ID}" >> "$GITHUB_OUTPUT"
           echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
           echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
-          echo "source_name=${SOURCE_NAME}" >> "$GITHUB_OUTPUT"
           echo "publish_to_apispy=${PUBLISH_TO_APISPY}" >> "$GITHUB_OUTPUT"
+          echo "apispy_pack_id=${APISPY_PACK_ID}" >> "$GITHUB_OUTPUT"
+          echo "apispy_pack_name=${APISPY_PACK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apispy_platform=${APISPY_PLATFORM}" >> "$GITHUB_OUTPUT"
 
       - name: Clone / update spec repository
         run: |
@@ -152,9 +156,9 @@ jobs:
                 "run_id": "${{ github.run_id }}",
                 "tag": "shards-latest",
                 "source_id": "${{ steps.source.outputs.source_id }}",
-                "pack_id": "${{ steps.source.outputs.source_id }}",
-                "pack_name": "${{ steps.source.outputs.source_name }}",
-                "platform": "azure",
+                "pack_id": "${{ steps.source.outputs.apispy_pack_id }}",
+                "pack_name": "${{ steps.source.outputs.apispy_pack_name }}",
+                "platform": "${{ steps.source.outputs.apispy_platform }}",
                 "triggered_by": "${{ github.event_name }}"
               }
             }'
