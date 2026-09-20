@@ -425,7 +425,7 @@ python3 scripts/export/export_api_inventory.py \
 
 **Output formats:**
 - `api-index.json` — Flat pretty-printed index
-- `api-index-grouped.json` — Grouped/deduplicated (schema 3.0.0)
+- `api-index-grouped.json` — Grouped/deduplicated (schema 3.2.0; additive auth/parameter/schema summaries plus API-family and version-lineage metadata)
 - `shards/{Provider.Namespace}.min.json` — Per-provider shards for APISpy
 
 **Cross-repo pipeline:** The `daily-api-index-export-sharded.yml` workflow runs nightly, publishes the sharded zip to the `shards-latest` GitHub Release, and triggers [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) to update its extension shard data automatically.

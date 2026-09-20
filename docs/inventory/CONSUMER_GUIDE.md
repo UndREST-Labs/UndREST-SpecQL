@@ -13,7 +13,7 @@ The export pipeline produces two formats:
 | File | Schema | Best for |
 |------|--------|----------|
 | `api-index.json` | `2.1.0` | Tooling that processes every operation individually (analysis scripts, grep, jq) |
-| `api-index-grouped.json` | `3.0.0` | Runtime consumers that need compact, pre-grouped data (browser extensions, proxies) |
+| `api-index-grouped.json` | `3.2.0` | Runtime consumers that need compact, pre-grouped data and optional research metadata (browser extensions, proxies) |
 
 This guide focuses on the **grouped format** (`api-index-grouped.json`), which is
 the recommended format for size-sensitive consumers.  The flat format is documented
@@ -35,6 +35,8 @@ providers
                            ├─ provider_namespace
                            ├─ plane
                            ├─ lookup_key           ← "host|METHOD|path_template"
+                           ├─ api_family           ← structural sibling/resource hierarchy metadata
+                           ├─ version_lineage      ← ordered versions with previous/next links
                            └─ versions
                                 └─ api_version
                                      ├─ is_preview
@@ -61,6 +63,9 @@ index can answer:
 | Is this operation preview-only? | If all version entries have `is_preview: true` |
 | Which Azure service owns this path? | Read `provider_namespace` from the route |
 | Is this a management-plane or data-plane call? | Read `plane` from the route |
+| Which sibling operations belong to the same resource family? | Group routes by `api_family.family_key` |
+| What is the parent/child resource relationship? | Read `api_family.resource_type_path` and `api_family.parent_resource_key` |
+| Which versions exist and what is their relative order? | Read `version_lineage.ordered_versions` |
 
 ---
 
@@ -137,6 +142,27 @@ def check_version(route, observed_api_version):
         return "route_match_no_versions", None
 ```
 
+### Step 6 — Correlate sibling operations and versions
+
+The grouped `3.2.0` route entry includes optional structural metadata for
+correlation. It is additive; consumers that only understand `3.1.0` can ignore it.
+
+```python
+family = route.get("api_family", {})
+family_key = family.get("family_key")              # e.g. Microsoft.Storage/storageAccounts
+resource_path = family.get("resource_type_path", [])  # e.g. ["storageAccounts", "blobServices"]
+parent_key = family.get("parent_resource_key")
+
+lineage = route.get("version_lineage", {}).get("ordered_versions", [])
+for item in lineage:
+    print(item["api_version"], item["stability"], item.get("previous_version"), item.get("next_version"))
+```
+
+`api_family` is derived from normalized route-template segments and provider
+namespace only. `version_lineage` is derived from route version keys only; the
+`stability` value is `"preview"` for version strings containing `preview`,
+`"stable"` for bare `YYYY-MM-DD`, and `"unknown"` otherwise.
+
 ---
 
 ## "Spec vs Reality" Matching Outcomes
@@ -193,7 +219,7 @@ for ns, prov in index["providers"].items():
 
 - `metadata.generated_at` — when the index was produced
 - `metadata.source_commit` — the exact Azure REST API specs commit used
-- `metadata.schema_version` — `"3.0.0"` for the grouped format; check before processing
+- `metadata.schema_version` — `"3.2.0"` for current grouped/sharded exports; 3.1.0 consumers can ignore additive route-correlation fields
 - `metadata.export_format` — `"grouped"` (distinguishes from flat format files)
 
 The index is regenerated daily by the SpecRecon CI workflow.

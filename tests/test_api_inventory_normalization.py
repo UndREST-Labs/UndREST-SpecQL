@@ -311,6 +311,19 @@ class TestNormalizePathTemplateForKey:
         assert "blobServices/default" in result
         assert "{name}" in result
 
+    def test_nested_singleton_child_resource_names_replaced(self):
+        path = (
+            "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}"
+            "/providers/Microsoft.Storage/storageAccounts/{accountName}"
+            "/blobServices/default/containers/{containerName}"
+        )
+        expected = (
+            "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}"
+            "/providers/Microsoft.Storage/storageAccounts/{name}"
+            "/blobServices/default/containers/{name}"
+        )
+        assert norm.normalize_path_template_for_key(path) == expected
+
     def test_storage_account_name_replaced(self):
         path = (
             "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}"

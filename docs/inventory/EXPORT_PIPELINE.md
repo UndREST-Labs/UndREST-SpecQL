@@ -16,7 +16,7 @@ Two complementary formats are produced:
 
 - **`api-index.json`** — flat array, one entry per HTTP operation (schema `2.1.0`).
   Suitable for tooling that iterates over every operation individually.
-- **`api-index-grouped.json`** — grouped/deduplicated structure (schema `3.0.0`).
+- **`api-index-grouped.json`** — grouped/deduplicated structure (schema `3.2.0`) with optional bounded research and route-correlation metadata.
   Routes are nested by provider namespace → host → route → version, so shared
   fields are stored only once.  This is the preferred format for size-sensitive
   consumers such as the future **APISpy** browser extension.
@@ -79,7 +79,7 @@ python3 scripts/export/export_api_inventory.py \
 | `--source`      | `azure-rest-api-specs/specification`   | Path to the specifications directory to walk   |
 | `--output-dir`  | `inventory/`                           | Directory where output files are written       |
 | `--minified`    | _(off)_                                | Also write minified variants (no indentation)  |
-| `--grouped`     | _(off)_                                | Also write grouped/deduplicated `api-index-grouped.json` (schema 3.0.0) |
+| `--grouped`     | _(off)_                                | Also write grouped/deduplicated `api-index-grouped.json` (schema 3.2.0) |
 | `--verbose`     | _(off)_                                | Print per-file progress messages               |
 
 ---
@@ -90,7 +90,7 @@ python3 scripts/export/export_api_inventory.py \
 |-----------------------------------|--------------|-------------|
 | `inventory/api-index.json`        | _(always)_   | Flat pretty-printed index (schema 2.1.0, human-readable) |
 | `inventory/api-index.min.json`    | `--minified` | Flat minified index (same data, no indentation) |
-| `inventory/api-index-grouped.json`    | `--grouped`  | Grouped/deduplicated index (schema 3.0.0, recommended for runtime consumers) |
+| `inventory/api-index-grouped.json`    | `--grouped`  | Grouped/deduplicated index (schema 3.2.0, recommended for runtime consumers) |
 | `inventory/api-index-grouped.min.json` | `--grouped --minified` | Grouped minified index |
 
 All files are listed in `.gitignore` and are not committed to the repository.

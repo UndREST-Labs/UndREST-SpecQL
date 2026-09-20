@@ -68,8 +68,9 @@ Adding a new source requires only a source config JSON and optionally a platform
 
 `scripts/export/export_api_inventory.py` walks the spec corpus and produces:
 - `api-index.json` — flat index of every operation
-- `api-index-grouped.json` — nested by provider/host/route (with `--grouped`)
-- `shards/<provider>.json` — per-provider shards (with `--sharded`)
+- `api-index-grouped.json` — nested by provider/host/route (with `--grouped`, schema 3.2.0)
+- `shards/<provider>.json` — per-provider shards (with `--sharded`, schema 3.2.0)
+- Grouped/sharded route entries optionally include bounded `api_family` and `version_lineage` metadata for sibling-operation correlation, and version entries optionally include bounded documented auth, parameter names, and request/response schema summaries for APISpy research correlation. Flat schema 2.1.0 remains unchanged.
 - Minified variants (`*.min.json`) with `--minified`
 - Packaged sharded export ZIPs for release publication
 
@@ -139,6 +140,7 @@ requires a package, document it explicitly rather than silently adding.
 - requirements.txt lists only runtime-required Python packages; test tools (pytest) are documented separately.
 - Export pipeline output is deterministic given the same spec corpus input.
 - SpeQL product code changes must not alter the export pipeline's JSON schema without updating APISpy consumers.
+- Grouped/sharded research and route-correlation metadata must remain deterministic and bounded; it may resolve local schema references but must not export descriptions, examples, defaults, raw schemas, or remote-reference content.
 
 ## Known sharp edges
 
@@ -153,4 +155,4 @@ requires a package, document it explicitly rather than silently adding.
 <!-- Populate with unresolved questions that should persist into future work. -->
 
 ## Last updated
-2026-06-30 — cARL installation; initial SpecQL-specific memory populated.
+2026-09-20 — grouped/sharded schema 3.2.0 adds bounded API-family/resource-hierarchy and version-lineage metadata while flat schema 2.1.0 remains stable.

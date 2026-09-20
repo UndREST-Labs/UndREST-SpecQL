@@ -11,18 +11,16 @@ PR constraints are historical evidence unless they are explicitly
 promoted to durable invariants.
 
 ## Goal
-Harden generated artefact boundaries so generated databases, cloned spec corpora,
-SARIF/results, exported inventory, and local-only cache/env files cannot be
-accidentally committed.
+Add bounded, deterministic API-family/resource-hierarchy and version-lineage metadata to grouped and sharded API inventory exports so APISpy can correlate sibling operations and API-version relationships without receiving prose, examples, raw schemas, or live observations.
 
 ## Contract status
 active
 
 ## Non-goals
-- Do not refactor product code or change query logic.
-- Do not regenerate inventory, database, SARIF, or shard outputs.
-- Do not modify workflows or CodeQL queries.
-- Do not add Python packages to `requirements.txt`.
+- Do not change CodeQL queries, analyser behaviour, workflows, dependencies, or source configuration.
+- Do not regenerate or commit inventory, database, SARIF, shard, or packaged outputs.
+- Do not change flat inventory schema 2.1.0.
+- Do not resolve remote references, retain examples/descriptions, infer vulnerabilities, or add model/network functionality.
 
 ## Carry-forward rules
 The following constraints from this PR are promoted to durable invariants and must persist into all future PRs:
@@ -32,59 +30,67 @@ The following constraints from this PR are promoted to durable invariants and mu
 - `carl doctor` must remain healthy after any changes to `.github/carl/` artefacts.
 
 ## Approved scope
-- Update `.gitignore` to ignore generated/heavy/local artefacts and add ownership comments.
-- Remove already tracked generated inventory ZIP exports if needed to make the ignore boundary effective.
-- Update `README.md` or `CONTRIBUTING.md` only if artefact ownership needs clarification.
-- Update `.github/carl/memory.md` only if generated artefact boundaries or canonical operating assumptions change.
-- Update this contract to match the approved scope and validation for this PR.
+- Add compact API-family/resource-hierarchy metadata to grouped/sharded route entries derived from normalised route template segments, provider namespace, and bounded resource-type paths.
+- Add compact version-lineage metadata to grouped/sharded route entries derived from deterministic ordering of version keys and preview/stable classification when derivable from version strings.
+- Preserve the existing bounded auth, parameter-name, request-schema, and response-schema summaries on grouped/sharded version entries.
+- Bump grouped/sharded schema from additive 3.1.0 to additive 3.2.0 while preserving existing fields and route keys.
+- Add focused exporter compatibility, hierarchy, lineage, truncation, omission, and flat-schema tests.
+- Update schema documentation, consumer guidance, export guide, README version references if present, and durable cARL architecture notes.
 
 ## Intentional amendments
-- Supersedes the previous lightweight-test workflow scope in this file.
-- Allows tracked generated inventory ZIP removals as part of repository-boundary hardening.
+- Supersedes the completed generated-artefact-boundary hardening scope.
+- User-approved continuation of the UndREST research-platform implementation permits this bounded exporter change.
 
 ## Forbidden scope
-- Modifying product behaviour in `SpeQL.py`, `analyze.py`, `refresh_database.py`, `run-queries.sh`, or export logic.
-- Modifying CodeQL queries under `queries/`.
-- Modifying workflows under `.github/workflows/`.
-- Modifying source configs under `config/sources/`.
-- Adding/removing/changing Python packages in `requirements.txt`.
-- Regenerating or editing generated database, SARIF, JSON inventory, or shard contents.
+- Modifying CodeQL queries, analyser/runtime entry points, workflows, source configs, or dependencies.
+- Regenerating or editing generated database, SARIF, JSON inventory, shard, or packaged artefacts.
+- Breaking flat 2.1.0 or existing grouped/sharded route and version fields.
+- Exporting raw examples, descriptions, defaults, credentials, or unrestricted schema content.
+- Adding speculative vulnerability labels or API-specific hard-coding.
 
 ## Architectural constraints
-- SpeQL architecture and product behaviour must remain identical before and after this PR.
-- `.gitignore` should document which script or pipeline owns each generated artefact area.
-- Generated inventory boundaries must cover flat, grouped, sharded, and packaged export outputs.
-- `requirements.txt` remains runtime-focused; pytest is installed separately as a test tool.
+- Static API knowledge remains owned by SpecQL; observations and findings remain owned by APISpy.
+- Metadata extraction must be deterministic, bounded, provider-neutral, and derived only from OpenAPI/Swagger structure.
+- Existing 3.1.0 consumers must continue to function by ignoring additive 3.2.0 fields.
+- Local `$ref` cycles and malformed schemas must fail safely without aborting export.
+- Export pipeline output remains deterministic for identical input.
 
 ## Security constraints
-- No secrets, tokens, or credentials may be committed.
-- No new external network dependencies or dependencies in-repo may be introduced.
-- Ignore rules must not accidentally hide committed source files outside the intended generated/local artefact boundaries.
+- No secrets, tokens, credentials, examples, or sensitive default values may be copied into metadata.
+- Security metadata describes documented mechanisms only; it must not imply effective authorization or vulnerability status.
+- Fingerprints must represent schema structure, not raw payload content.
+- No external network or model dependencies may be introduced.
 
 ## Files expected to change
-- `.github/carl/current-pr-contract.md` — amended scope for this PR
-- `.gitignore` — hardened generated/local artefact boundaries
-- `inventory/api-index-23389057738.zip` — remove tracked generated export if confirmed in scope
-- `inventory/api-index-sharded-23390552485.zip` — remove tracked generated export if confirmed in scope
-- `README.md` and/or `CONTRIBUTING.md` — ownership clarification only if needed
-- `.github/carl/memory.md` — durable generated-artefact boundary reconciliation (if needed)
+- `.github/carl/current-pr-contract.md`
+- `.github/carl/memory.md`
+- `scripts/export/export_api_inventory.py`
+- `tests/test_api_inventory_export.py`
+- `tests/test_api_inventory_normalization.py`
+- `docs/inventory/API_INDEX_SCHEMA.md`
+- `docs/inventory/CONSUMER_GUIDE.md`
+- `docs/inventory/EXPORT_PIPELINE.md`
+- `README.md` if it states grouped/sharded schema version
 
 ## Tests / validation
-- Install runtime deps: `pip3 install -r requirements.txt`
-- Install test tool explicitly: `pip3 install pytest`
-- Run lightweight tests: `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
-- Confirm `git status` contains only intended `.gitignore`, docs, cARL, and generated ZIP removal changes
-- Confirm no generated artefacts are newly added
+- `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
+- Confirm flat output remains schema 2.1.0 and does not contain new grouped-only metadata.
+- Confirm grouped and sharded output use schema 3.2.0 with optional bounded metadata.
+- Confirm malformed/cyclic local references do not fail export.
+- Confirm API-family/resource-hierarchy metadata, version-lineage ordering, preview/stable classification, truncation markers, omission when empty, and flat-output stability.
+- Confirm no generated artefacts appear in git status.
+- Run `python3 -m compileall` on changed Python files, `git diff --check`, and `carl doctor` when available.
 
 ## Stop conditions
-- Any change that alters product script or CodeQL query behaviour.
-- Any generated database, SARIF, JSON inventory, or shard file appearing in git status as a new addition.
-- Any secret detected in changed files.
+- Metadata requires remote reference fetching or new dependencies.
+- Existing route identity, matching keys, or flat output would need a breaking change.
+- Generated inventory, database, SARIF, or shard artefacts appear in git status.
+- A secret or raw example/default value would be retained.
 
 ## Escalation triggers
-- If hardening requires modifying workflows, product code, or query logic.
-- If additional tracked generated artefacts outside the approved scope need deletion.
-- If ignore patterns would overlap committed source files or docs unexpectedly.
+- Any need to modify workflows, CodeQL queries, analyser logic, dependencies, or source configs.
+- Any proposed metadata whose semantics cannot be derived deterministically from the specification.
+- Any need for a breaking grouped/sharded schema version.
 
 ## Context reset notes
-This contract covers generated-artefact boundary hardening only. Close/reset after merge.
+This contract covers the additive SpecQL 3.2.0 sibling-correlation metadata phase for SpecQL exports only. APISpy consumption is out of scope for this phase.
