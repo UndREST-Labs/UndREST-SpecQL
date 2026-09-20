@@ -19,16 +19,16 @@ Options:
     --source-repo   Upstream repository identifier recorded in metadata (e.g. Azure/azure-rest-api-specs)
     --source-branch Branch name recorded in metadata (default: main)
     --minified      Also produce a minified api-index.min.json (no indentation)
-    --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.1.0)
-    --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.1.0)
+    --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.2.0)
+    --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.2.0)
     --verbose       Print per-file progress messages
 
 Output files:
     api-index.json                     Flat pretty-printed index (schema 2.1.0)
     api-index.min.json                 Flat minified index (with --minified)
-    api-index-grouped.json             Grouped/deduplicated index (with --grouped, schema 3.1.0)
+    api-index-grouped.json             Grouped/deduplicated index (with --grouped, schema 3.2.0)
     api-index-grouped.min.json         Grouped minified index (with --grouped --minified)
-    shards/{Provider.Namespace}.json   Per-provider shard (with --sharded, schema 3.1.0)
+    shards/{Provider.Namespace}.json   Per-provider shard (with --sharded, schema 3.2.0)
     shards/{Provider.Namespace}.min.json  Minified per-provider shard (with --sharded --minified)
 """
 
@@ -66,12 +66,13 @@ from normalize_api_inventory import (
 TOOL_NAME = "SpecRecon"
 TOOL_COMPONENT = "SpeQL"
 SCHEMA_VERSION = "2.1.0"          # flat format — minor bump for additive source_kind field
-GROUPED_SCHEMA_VERSION = "3.1.0"  # additive research metadata for grouped/sharded format
+GROUPED_SCHEMA_VERSION = "3.2.0"  # additive sibling-correlation metadata for grouped/sharded format
 
 _MAX_SCHEMA_DEPTH = 8
 _MAX_SCHEMA_NODES = 1000
 _MAX_TOP_LEVEL_FIELDS = 100
 _MAX_METADATA_ITEMS = 100
+_MAX_RESOURCE_TYPE_SEGMENTS = 20
 
 # Source metadata defaults — overridden at runtime via CLI args or source config.
 # These remain as module-level sentinels so that callers that import and use
@@ -733,6 +734,106 @@ def _merge_research_metadata(target: dict, metadata: dict) -> None:
     )
 
 
+def _path_segments(path_template: str) -> list:
+    normalized = normalize_path_template_for_key(path_template)
+    if not isinstance(normalized, str):
+        return []
+    path_only = normalized.split("?", 1)[0]
+    return [segment for segment in path_only.strip("/").split("/") if segment]
+
+
+def _is_template_parameter(segment: str) -> bool:
+    return segment.startswith("{") and segment.endswith("}")
+
+
+def _api_family_metadata(provider_ns: str, path_template: str) -> dict:
+    """Derive bounded route-family metadata from structural route segments."""
+    if not provider_ns or provider_ns == "unknown":
+        return {}
+
+    segments = _path_segments(path_template)
+    provider_index = None
+    for index, segment in enumerate(segments[:-1]):
+        if segment.lower() == "providers" and segments[index + 1].lower() == provider_ns.lower():
+            provider_index = index + 1
+            break
+    if provider_index is None:
+        return {}
+
+    all_resource_types = [
+        segment[:200]
+        for segment in segments[provider_index + 1:]
+        if not _is_template_parameter(segment) and segment.lower() != "default"
+    ]
+    if not all_resource_types:
+        return {}
+
+    resource_type_path = all_resource_types[:_MAX_RESOURCE_TYPE_SEGMENTS]
+    family_key = f"{provider_ns}/{resource_type_path[0]}"
+    resource_key = f"{provider_ns}/{'/'.join(resource_type_path)}"
+
+    metadata = {
+        "family_key": family_key,
+        "provider_namespace": provider_ns,
+        "resource_type_path": resource_type_path,
+        "resource_key": resource_key,
+        "resource_depth": len(all_resource_types),
+    }
+    if len(resource_type_path) > 1:
+        parent_path = resource_type_path[:-1]
+        metadata["parent_resource_type_path"] = parent_path
+        metadata["parent_resource_key"] = f"{provider_ns}/{'/'.join(parent_path)}"
+    if len(all_resource_types) > _MAX_RESOURCE_TYPE_SEGMENTS:
+        metadata["resource_type_path_truncated"] = True
+    return metadata
+
+
+def _version_stability_from_string(api_version: str) -> str:
+    version = str(api_version or "")
+    if is_preview_version(version):
+        return "preview"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", version):
+        return "stable"
+    return "unknown"
+
+
+def _version_sort_key(api_version: str) -> tuple:
+    version = str(api_version or "")
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})(.*)$", version)
+    if match:
+        suffix = match.group(4).lower()
+        return (0, int(match.group(1)), int(match.group(2)), int(match.group(3)), suffix, version.lower())
+    return (1, version.lower())
+
+
+def _version_lineage_metadata(versions: dict) -> dict:
+    """Return bounded ordered version lineage for a route."""
+    ordered_versions = sorted(
+        (str(version) for version in versions if version and version != "unknown"),
+        key=_version_sort_key,
+    )
+    if not ordered_versions:
+        return {}
+
+    bounded_versions = ordered_versions[:_MAX_METADATA_ITEMS]
+    entries = []
+    for index, api_version in enumerate(bounded_versions):
+        entry = {
+            "api_version": api_version,
+            "stability": _version_stability_from_string(api_version),
+        }
+        if index > 0:
+            entry["previous_version"] = bounded_versions[index - 1]
+        if index + 1 < len(bounded_versions):
+            entry["next_version"] = bounded_versions[index + 1]
+        entries.append(entry)
+
+    metadata = {"ordered_versions": entries}
+    if len(ordered_versions) > _MAX_METADATA_ITEMS:
+        metadata["versions_truncated"] = True
+    return metadata
+
+
 def _build_grouped_index(flat_ops: list) -> dict:
     """Transform the flat operations list into a grouped providers structure.
 
@@ -815,6 +916,12 @@ def _build_grouped_index(flat_ops: list) -> dict:
     for provider in providers.values():
         for host_entry in provider.get("hosts", {}).values():
             for route in host_entry.get("routes", {}).values():
+                api_family = _api_family_metadata(route.get("provider_namespace", ""), route.get("path_template", ""))
+                if api_family:
+                    route["api_family"] = api_family
+                version_lineage = _version_lineage_metadata(route.get("versions", {}))
+                if version_lineage:
+                    route["version_lineage"] = version_lineage
                 for version in route.get("versions", {}).values():
                     auth = version.get("auth", {})
                     if auth.get("status") == "unspecified" and not auth.get("requirements") and not auth.get("schemes"):
@@ -1160,7 +1267,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Also produce a grouped/deduplicated api-index-grouped.json "
-            "(schema 3.1.0). Routes are grouped by provider → host → route, "
+            "(schema 3.2.0). Routes are grouped by provider → host → route, "
             "with version-specific info nested underneath."
         ),
     )
@@ -1170,7 +1277,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Also produce per-provider shard files under {output-dir}/shards/. "
             "Each file is named {Provider.Namespace}.json and contains only that "
-            "provider's routes in the same grouped (schema 3.1.0) structure."
+            "provider's routes in the same grouped (schema 3.2.0) structure."
         ),
     )
     parser.add_argument(

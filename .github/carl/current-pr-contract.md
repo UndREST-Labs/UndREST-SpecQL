@@ -11,7 +11,7 @@ PR constraints are historical evidence unless they are explicitly
 promoted to durable invariants.
 
 ## Goal
-Add bounded, deterministic security-research metadata to grouped and sharded API inventory exports so APISpy can correlate documented authentication, parameters, and schema shapes without receiving raw examples or descriptions.
+Add bounded, deterministic API-family/resource-hierarchy and version-lineage metadata to grouped and sharded API inventory exports so APISpy can correlate sibling operations and API-version relationships without receiving prose, examples, raw schemas, or live observations.
 
 ## Contract status
 active
@@ -30,12 +30,12 @@ The following constraints from this PR are promoted to durable invariants and mu
 - `carl doctor` must remain healthy after any changes to `.github/carl/` artefacts.
 
 ## Approved scope
-- Add compact auth, parameter-name, request-schema, and response-schema summaries to grouped/sharded version entries.
-- Resolve only bounded local JSON references required to describe schema shape.
-- Bump grouped/sharded schema from 3.0.0 to additive 3.1.0 while preserving existing fields and route keys.
-- Add focused exporter compatibility and metadata tests.
-- Update schema documentation and durable cARL architecture notes.
-- Update APISpy separately to consume the new fields optionally while remaining compatible with 3.0.0 shards.
+- Add compact API-family/resource-hierarchy metadata to grouped/sharded route entries derived from normalised route template segments, provider namespace, and bounded resource-type paths.
+- Add compact version-lineage metadata to grouped/sharded route entries derived from deterministic ordering of version keys and preview/stable classification when derivable from version strings.
+- Preserve the existing bounded auth, parameter-name, request-schema, and response-schema summaries on grouped/sharded version entries.
+- Bump grouped/sharded schema from additive 3.1.0 to additive 3.2.0 while preserving existing fields and route keys.
+- Add focused exporter compatibility, hierarchy, lineage, truncation, omission, and flat-schema tests.
+- Update schema documentation, consumer guidance, export guide, README version references if present, and durable cARL architecture notes.
 
 ## Intentional amendments
 - Supersedes the completed generated-artefact-boundary hardening scope.
@@ -51,7 +51,7 @@ The following constraints from this PR are promoted to durable invariants and mu
 ## Architectural constraints
 - Static API knowledge remains owned by SpecQL; observations and findings remain owned by APISpy.
 - Metadata extraction must be deterministic, bounded, provider-neutral, and derived only from OpenAPI/Swagger structure.
-- Existing 3.0.0 consumers must continue to function by ignoring additive 3.1.0 fields.
+- Existing 3.1.0 consumers must continue to function by ignoring additive 3.2.0 fields.
 - Local `$ref` cycles and malformed schemas must fail safely without aborting export.
 - Export pipeline output remains deterministic for identical input.
 
@@ -66,15 +66,20 @@ The following constraints from this PR are promoted to durable invariants and mu
 - `.github/carl/memory.md`
 - `scripts/export/export_api_inventory.py`
 - `tests/test_api_inventory_export.py`
+- `tests/test_api_inventory_normalization.py`
 - `docs/inventory/API_INDEX_SCHEMA.md`
+- `docs/inventory/CONSUMER_GUIDE.md`
+- `docs/inventory/EXPORT_PIPELINE.md`
+- `README.md` if it states grouped/sharded schema version
 
 ## Tests / validation
 - `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
 - Confirm flat output remains schema 2.1.0 and does not contain new grouped-only metadata.
-- Confirm grouped and sharded output use schema 3.1.0 with optional bounded metadata.
+- Confirm grouped and sharded output use schema 3.2.0 with optional bounded metadata.
 - Confirm malformed/cyclic local references do not fail export.
+- Confirm API-family/resource-hierarchy metadata, version-lineage ordering, preview/stable classification, truncation markers, omission when empty, and flat-output stability.
 - Confirm no generated artefacts appear in git status.
-- Run `git diff --check` and `carl doctor` when available.
+- Run `python3 -m compileall` on changed Python files, `git diff --check`, and `carl doctor` when available.
 
 ## Stop conditions
 - Metadata requires remote reference fetching or new dependencies.
@@ -88,4 +93,4 @@ The following constraints from this PR are promoted to durable invariants and mu
 - Any need for a breaking grouped/sharded schema version.
 
 ## Context reset notes
-This contract covers the additive SpecQL 3.1.0 research-enrichment phase and optional APISpy consumption.
+This contract covers the additive SpecQL 3.2.0 sibling-correlation metadata phase for SpecQL exports only. APISpy consumption is out of scope for this phase.

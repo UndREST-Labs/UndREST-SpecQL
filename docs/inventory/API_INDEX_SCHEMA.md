@@ -7,8 +7,8 @@ Two formats are available:
 | File | Schema version | Flag | Description |
 |------|---------------|------|-------------|
 | `api-index.json` / `api-index.min.json` | `2.1.0` | _(default)_ | Flat array — one entry per HTTP operation found |
-| `api-index-grouped.json` / `api-index-grouped.min.json` | `3.1.0` | `--grouped` | Grouped/deduplicated — routes nested by provider → host → route → version |
-| `shards/{Provider.Namespace}.json` / `shards/{Provider.Namespace}.min.json` | `3.1.0` | `--sharded` | Per-provider shard — same grouped structure scoped to one provider namespace |
+| `api-index-grouped.json` / `api-index-grouped.min.json` | `3.2.0` | `--grouped` | Grouped/deduplicated — routes nested by provider → host → route → version |
+| `shards/{Provider.Namespace}.json` / `shards/{Provider.Namespace}.min.json` | `3.2.0` | `--sharded` | Per-provider shard — same grouped structure scoped to one provider namespace |
 
 > **Why the grouped format?**
 > The flat format repeats `host`, `provider_namespace`, `method`, `path_template`,
@@ -104,7 +104,7 @@ Each element represents one HTTP operation (method + path) found in a spec file.
 
 ---
 
-## Grouped Format — `api-index-grouped.json` (schema `3.1.0`)
+## Grouped Format — `api-index-grouped.json` (schema `3.2.0`)
 
 ### Top-Level Structure
 
@@ -122,7 +122,7 @@ Same fields as the flat metadata, with two additions:
 
 ```json
 {
-  "schema_version": "3.1.0",
+  "schema_version": "3.2.0",
   "export_format": "grouped"
 }
 ```
@@ -151,7 +151,28 @@ providers
   "provider_namespace": "Microsoft.Storage",
   "plane": "management",
   "lookup_key": "management.azure.com|GET|/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}",
-  "versions": { ... }
+  "api_family": {
+    "family_key": "Microsoft.Storage/storageAccounts",
+    "provider_namespace": "Microsoft.Storage",
+    "resource_type_path": ["storageAccounts"],
+    "resource_key": "Microsoft.Storage/storageAccounts",
+    "resource_depth": 1
+  },
+  "versions": { ... },
+  "version_lineage": {
+    "ordered_versions": [
+      {
+        "api_version": "2022-01-01",
+        "stability": "stable",
+        "next_version": "2023-01-01"
+      },
+      {
+        "api_version": "2023-01-01",
+        "stability": "stable",
+        "previous_version": "2022-01-01"
+      }
+    ]
+  }
 }
 ```
 
@@ -162,7 +183,74 @@ providers
 | `provider_namespace` | string | E.g. `"Microsoft.Storage"`, or `"unknown"` |
 | `plane`              | string | `"management"`, `"data"`, or `"unknown"` |
 | `lookup_key`         | string | `"<host>|<METHOD>|<path_template>"` for fast exact matching |
+| `api_family`         | object | Optional bounded structural family/hierarchy metadata derived from the normalized route template and provider namespace |
 | `versions`           | object | Map of `api_version → version entry` (see below) |
+| `version_lineage`    | object | Optional bounded ordered version list and previous/next links derived from this route's version keys |
+
+#### Route `api_family` object
+
+```json
+{
+  "family_key": "Microsoft.Storage/storageAccounts",
+  "provider_namespace": "Microsoft.Storage",
+  "resource_type_path": ["storageAccounts", "blobServices", "containers"],
+  "resource_key": "Microsoft.Storage/storageAccounts/blobServices/containers",
+  "resource_depth": 3,
+  "parent_resource_type_path": ["storageAccounts", "blobServices"],
+  "parent_resource_key": "Microsoft.Storage/storageAccounts/blobServices"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `family_key` | string | Provider namespace plus top-level resource type. Sibling operations on the same top-level resource family share this key. |
+| `provider_namespace` | string | Provider namespace used to derive the family. |
+| `resource_type_path` | array | Bounded ordered resource-type segments after `/providers/{namespace}`. Template parameters and Azure singleton `default` name segments are excluded. |
+| `resource_key` | string | Provider namespace plus the full bounded `resource_type_path`. |
+| `resource_depth` | integer | Number of derived resource-type segments before bounding. |
+| `parent_resource_type_path` | array | Optional bounded parent resource-type path, present only for nested resources. |
+| `parent_resource_key` | string | Optional provider namespace plus `parent_resource_type_path`. |
+| `resource_type_path_truncated` | boolean | Present and `true` when the route contains more resource-type segments than the exporter cap. |
+
+`api_family` is omitted when a route has no provider namespace or no structural
+resource-type path. It is structural only: descriptions, tags, operation names,
+examples, and inferred product semantics are not used.
+
+#### Route `version_lineage` object
+
+```json
+{
+  "ordered_versions": [
+    {
+      "api_version": "2022-01-01",
+      "stability": "stable",
+      "next_version": "2023-01-01-preview"
+    },
+    {
+      "api_version": "2023-01-01-preview",
+      "stability": "preview",
+      "previous_version": "2022-01-01"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ordered_versions` | array | Bounded list of version entries sorted deterministically by date-like prefix and then lexically. |
+| `versions_truncated` | boolean | Present and `true` when more version keys exist than the exporter cap. |
+
+Each `ordered_versions` item contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `api_version` | string | Version key from the route's `versions` object. |
+| `stability` | string | `"preview"` when the version string contains `preview`, `"stable"` for bare `YYYY-MM-DD`, otherwise `"unknown"`. |
+| `previous_version` | string | Previous version in the bounded ordered list; omitted for the first item. |
+| `next_version` | string | Next version in the bounded ordered list; omitted for the last item. |
+
+`version_lineage` is omitted when a route has no known version keys other than
+`"unknown"`.
 
 #### Version Entry (version-specific fields)
 
@@ -286,10 +374,10 @@ the exact route cannot be matched.
 
 ---
 
-## Sharded Format — `shards/{Provider.Namespace}.json` (schema `3.1.0`)
+## Sharded Format — `shards/{Provider.Namespace}.json` (schema `3.2.0`)
 
 When `--sharded` is used, the exporter writes one JSON file per provider namespace
-into a `shards/` subdirectory.  Each shard uses the same schema version (`3.1.0`) as
+into a `shards/` subdirectory.  Each shard uses the same schema version (`3.2.0`) as
 the grouped format but scopes the content to a single provider.
 
 ### File naming
@@ -316,7 +404,7 @@ additional `provider_namespace` field:
 
 ```json
 {
-  "schema_version": "3.1.0",
+  "schema_version": "3.2.0",
   "export_format": "sharded",
   "provider_namespace": "Microsoft.Storage"
 }
@@ -387,6 +475,7 @@ Consumers should check `schema_version` before processing.
 
 | Version | Format | Changes |
 |---------|--------|---------|
+| `3.2.0` | grouped / sharded | Added bounded route-level `api_family` and `version_lineage` metadata so consumers can correlate sibling operations, parent/child resource hierarchy, ordered API versions, and deterministically derived preview/stable version classes. Existing 3.1.0 fields are unchanged. |
 | `3.1.0` | grouped / sharded | Added bounded `auth`, parameter-name, request-schema, and response-schema summaries to version entries. Local schema references are resolved for structural fingerprints; descriptions, examples, defaults, and remote references are not exported. Existing 3.0.0 fields are unchanged. |
 | `3.0.0` | grouped / sharded | **New format.** Providers → hosts → routes → versions hierarchy. Replaces the flat operations array for size-sensitive consumers. `export_format: "grouped"` in metadata. The `--sharded` flag uses the same schema but scopes each file to one provider namespace (`export_format: "sharded"`). |
 | `2.1.0` | flat | Added `source_kind` field to each operation entry (which paths block the operation came from: `"paths"` or `"x-ms-paths"`). |

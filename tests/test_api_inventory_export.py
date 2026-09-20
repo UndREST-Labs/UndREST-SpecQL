@@ -298,7 +298,7 @@ class TestRunExport:
 # ---------------------------------------------------------------------------
 
 class TestGroupedExport:
-    """Tests for the --grouped / grouped=True export mode (schema 3.1.0)."""
+    """Tests for the --grouped / grouped=True export mode (schema 3.2.0)."""
 
     def test_grouped_flag_produces_grouped_file(self, tmp_path):
         source = tmp_path / "spec"
@@ -335,7 +335,7 @@ class TestGroupedExport:
         exp.run_export(source, output, minified=False, verbose=False, grouped=True)
         index = json.loads((output / "api-index-grouped.json").read_text())
 
-        assert index["metadata"]["schema_version"] == "3.1.0"
+        assert index["metadata"]["schema_version"] == "3.2.0"
         assert index["metadata"]["export_format"] == "grouped"
 
     def test_flat_index_still_produced_with_grouped(self, tmp_path):
@@ -426,6 +426,148 @@ class TestGroupedExport:
         assert "request_schemas" not in ver
         assert "response_schemas" not in ver
 
+    def test_api_family_metadata_resource_hierarchy(self, tmp_path):
+        """Route entries expose bounded API-family and parent hierarchy metadata."""
+        source = tmp_path / "spec"
+        v_dir = source / "Microsoft.Storage" / "stable" / "2023-01-01"
+        v_dir.mkdir(parents=True)
+        path = (
+            "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}"
+            "/providers/Microsoft.Storage/storageAccounts/{accountName}"
+            "/blobServices/default/containers/{containerName}"
+        )
+        _write_spec(v_dir, "storage.json", _minimal_swagger(paths={
+            path: {"get": {"operationId": "Containers_Get", "responses": {}}}
+        }))
+        output = tmp_path / "out"
+
+        exp.run_export(source, output, minified=False, verbose=False, grouped=True)
+        index = json.loads((output / "api-index-grouped.json").read_text())
+        route_key = (
+            "GET /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}"
+            "/providers/Microsoft.Storage/storageAccounts/{name}"
+            "/blobServices/default/containers/{name}"
+        )
+        api_family = (
+            index["providers"]["Microsoft.Storage"]
+            ["hosts"]["management.azure.com"]
+            ["routes"][route_key]
+            ["api_family"]
+        )
+
+        assert api_family == {
+            "family_key": "Microsoft.Storage/storageAccounts",
+            "provider_namespace": "Microsoft.Storage",
+            "resource_type_path": ["storageAccounts", "blobServices", "containers"],
+            "resource_key": "Microsoft.Storage/storageAccounts/blobServices/containers",
+            "resource_depth": 3,
+            "parent_resource_type_path": ["storageAccounts", "blobServices"],
+            "parent_resource_key": "Microsoft.Storage/storageAccounts/blobServices",
+        }
+
+    def test_version_lineage_ordering_and_stability(self, tmp_path):
+        """Route entries expose ordered version links and deterministic stability classes."""
+        source = tmp_path / "spec"
+        versions = (
+            ("2023-06-01-preview", "preview"),
+            ("2022-01-01", "stable"),
+            ("2023-01-01", "stable"),
+            ("vNext", "stable"),
+        )
+        for version, directory in versions:
+            v_dir = source / "Microsoft.Storage" / directory / version
+            v_dir.mkdir(parents=True)
+            spec = _minimal_swagger(paths={
+                "/providers/Microsoft.Storage/storageAccounts/{accountName}": {
+                    "get": {"operationId": f"StorageAccounts_Get_{version}", "responses": {}}
+                }
+            })
+            spec["info"]["version"] = version
+            _write_spec(v_dir, f"{version}.json", spec)
+        output = tmp_path / "out"
+
+        exp.run_export(source, output, minified=False, verbose=False, grouped=True)
+        index = json.loads((output / "api-index-grouped.json").read_text())
+        route = (
+            index["providers"]["Microsoft.Storage"]
+            ["hosts"]["management.azure.com"]
+            ["routes"]["GET /providers/Microsoft.Storage/storageAccounts/{name}"]
+        )
+        lineage = route["version_lineage"]["ordered_versions"]
+
+        assert [entry["api_version"] for entry in lineage] == [
+            "2022-01-01",
+            "2023-01-01",
+            "2023-06-01-preview",
+            "vNext",
+        ]
+        assert [entry["stability"] for entry in lineage] == [
+            "stable",
+            "stable",
+            "preview",
+            "unknown",
+        ]
+        assert "previous_version" not in lineage[0]
+        assert lineage[0]["next_version"] == "2023-01-01"
+        assert lineage[1]["previous_version"] == "2022-01-01"
+        assert lineage[1]["next_version"] == "2023-06-01-preview"
+        assert lineage[-1]["previous_version"] == "2023-06-01-preview"
+        assert "next_version" not in lineage[-1]
+
+    def test_bounded_hierarchy_and_version_lineage_truncation(self):
+        """Bounded route metadata reports truncation when caps are exceeded."""
+        long_path = "/providers/Microsoft.Test/" + "/".join(
+            f"type{i}/{{name{i}}}" for i in range(exp._MAX_RESOURCE_TYPE_SEGMENTS + 5)
+        )
+        flat_ops = []
+        for index in range(exp._MAX_METADATA_ITEMS + 5):
+            version = f"20{index // 12:02d}-{(index % 12) + 1:02d}-01"
+            flat_ops.append({
+                "host": "management.azure.com",
+                "method": "GET",
+                "path_template": long_path,
+                "operation_id": f"Things_Get_{index}",
+                "api_versions": [version],
+                "spec_file": f"spec/{version}/test.json",
+                "source_kind": "paths",
+                "plane": "management",
+                "is_preview": False,
+                "lookup_key": f"management.azure.com|GET|{long_path}",
+            })
+
+        providers = exp._build_grouped_index(flat_ops)
+        route = (
+            providers["Microsoft.Test"]
+            ["hosts"]["management.azure.com"]
+            ["routes"][f"GET {exp.normalize_path_template_for_key(long_path)}"]
+        )
+
+        assert len(route["api_family"]["resource_type_path"]) == exp._MAX_RESOURCE_TYPE_SEGMENTS
+        assert route["api_family"]["resource_type_path_truncated"] is True
+        assert len(route["version_lineage"]["ordered_versions"]) == exp._MAX_METADATA_ITEMS
+        assert route["version_lineage"]["versions_truncated"] is True
+
+    def test_family_and_lineage_omitted_when_empty(self):
+        """Routes without provider resources or known versions omit optional route metadata."""
+        flat_ops = [{
+            "host": "example.test",
+            "method": "GET",
+            "path_template": "/status",
+            "operation_id": "Status_Get",
+            "api_versions": ["unknown"],
+            "spec_file": "status.json",
+            "source_kind": "paths",
+            "plane": "unknown",
+            "is_preview": False,
+            "lookup_key": "example.test|GET|/status",
+        }]
+
+        providers = exp._build_grouped_index(flat_ops)
+        route = providers["unknown"]["hosts"]["example.test"]["routes"]["GET /status"]
+
+        assert "api_family" not in route
+        assert "version_lineage" not in route
+
     def test_grouped_research_metadata_swagger2(self, tmp_path):
         source = tmp_path / "spec"
         v_dir = source / "Microsoft.Test" / "stable" / "2023-01-01"
@@ -504,6 +646,8 @@ class TestGroupedExport:
         assert flat["metadata"]["schema_version"] == "2.1.0"
         assert "_research_metadata" not in flat["operations"][0]
         assert "auth" not in flat["operations"][0]
+        assert "api_family" not in flat["operations"][0]
+        assert "version_lineage" not in flat["operations"][0]
 
     def test_openapi3_metadata_and_anonymous_override(self, tmp_path):
         source = tmp_path / "spec"
@@ -842,7 +986,7 @@ class TestShardedExport:
         exp.run_export(source, output, minified=False, verbose=False, sharded=True)
         shard = json.loads((output / "shards" / "Microsoft.Storage.json").read_text())
         assert shard["metadata"]["export_format"] == "sharded"
-        assert shard["metadata"]["schema_version"] == "3.1.0"
+        assert shard["metadata"]["schema_version"] == "3.2.0"
         assert shard["metadata"]["provider_namespace"] == "Microsoft.Storage"
 
     def test_shard_contains_only_its_provider_routes(self, tmp_path):
