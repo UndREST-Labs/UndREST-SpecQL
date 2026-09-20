@@ -54,15 +54,14 @@ SpeQL is a Python + CodeQL analysis pipeline targeting Azure REST API JSON specs
 | `inventory/` | Generated; only `.gitkeep` tracked | Exported API index artefacts (`.json`, `.min.json`, `shards/`, and packaged `.zip` outputs are gitignored) |
 | `azure-rest-api-specs/` | Cloned externally; gitignored | Source spec corpus managed by refresh scripts |
 | `queries/azure-security/` | Committed | CodeQL query pack with `qlpack.yml` |
-| `config/sources/` | Committed | One JSON per spec source (currently `azure.json`) |
+| `config/sources/` | Committed | One JSON per spec source (`azure.json`, pinned `microsoft-graph.json`) |
 | `scripts/export/` | Committed | Export pipeline Python modules |
 | `scripts/sarif-analysis/` | Committed | SARIF threat hunting shell scripts |
 | `tests/` | Committed | Unit tests for export pipeline (120 tests; run without CodeQL or DB) |
 
 ### Multi-source architecture
 
-Scripts accept `--source-config config/sources/<platform>.json` to support any OpenAPI/Swagger spec corpus.
-Adding a new source requires only a source config JSON and optionally a platform-specific query directory.
+Refresh scripts accept `--source-config config/sources/<platform>.json` to support multiple OpenAPI/Swagger corpora. Source configs may pin an exact `source_commit`. The exporter supports a generic JSON profile and a reviewed `microsoft-graph` YAML profile; unusual routing semantics require an explicit bounded profile rather than heuristics.
 
 ### Export pipeline
 
@@ -74,7 +73,7 @@ Adding a new source requires only a source config JSON and optionally a platform
 - Minified variants (`*.min.json`) with `--minified`
 - Packaged sharded export ZIPs for release publication
 
-Published to UndREST-APISpy via GitHub Releases.
+Published to UndREST-APISpy via GitHub Releases. Export workflows compute semantic SHA-256 hashes with volatile `generated_at` metadata removed and only upload artifacts, replace the shard release, or dispatch APISpy when content changed; a tiny Actions cache stores the last changed hash.
 
 ### GitHub Actions workflows
 
@@ -93,7 +92,7 @@ JSON specs). This is a hard version pin, not a preference.
 
 ## Python dependencies
 
-`requirements.txt` currently lists only `pyfiglet>=0.8.0` (for the ASCII art logo).
+`requirements.txt` lists `pyfiglet>=0.8.0` for the CLI logo and `PyYAML>=6.0,<7.0` for safe parsing of authoritative OpenAPI YAML sources.
 
 Hidden runtime dependencies not in requirements.txt:
 - `pytest` — test runner; installed separately by CI workflows and docs
@@ -123,7 +122,8 @@ requires a package, document it explicitly rather than silently adding.
 ## Ecosystem context
 
 - **APISpy** (UndREST-Labs/UndREST-APISpy): browser extension that consumes SpeQL's exported JSON index for real-time request classification.
-- **azure-rest-api-specs** (Azure/azure-rest-api-specs): upstream spec corpus; cloned by refresh scripts, never vendored.
+- **azure-rest-api-specs** (Azure/azure-rest-api-specs): upstream Azure spec corpus; cloned by refresh scripts, never vendored.
+- **msgraph-metadata** (microsoftgraph/msgraph-metadata): authoritative Microsoft Graph OpenAPI source, pinned by exact commit and cloned locally; only canonical `openapi.yaml` files for v1.0 and beta are ingested.
 
 ## cARL installation
 
@@ -135,7 +135,7 @@ requires a package, document it explicitly rather than silently adding.
 
 ## Core invariants
 
-- Do not commit database/, results/, azure-rest-api-specs/, or generated inventory exports (JSON, shards, or packaged ZIPs).
+- Do not commit database/, results/, azure-rest-api-specs/, msgraph-metadata/, or generated inventory exports (JSON, shards, or packaged ZIPs).
 - Always pin CodeQL CLI to 2.20.1 or 2.20.2 in setup, docs, and CI.
 - requirements.txt lists only runtime-required Python packages; test tools (pytest) are documented separately.
 - Export pipeline output is deterministic given the same spec corpus input.
@@ -155,4 +155,4 @@ requires a package, document it explicitly rather than silently adding.
 <!-- Populate with unresolved questions that should persist into future work. -->
 
 ## Last updated
-2026-09-20 — grouped/sharded schema 3.2.0 adds bounded API-family/resource-hierarchy and version-lineage metadata while flat schema 2.1.0 remains stable.
+2026-09-20 — pinned Microsoft Graph export plus semantic-hash deduplication for export artifacts and publication.

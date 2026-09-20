@@ -165,9 +165,14 @@ def manage_source_repo(
     branch: str,
     spec_path: str,
     include_all: bool,
+    source_commit: str = "",
 ) -> bool:
     """Clone or update an API spec source repository."""
     print_info(f"Managing spec repository: {repo_url}")
+
+    if source_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", source_commit):
+        print_error("source_commit must be a full 40-character hexadecimal Git SHA")
+        return False
 
     specs_path = Path(specs_dir)
 
@@ -180,22 +185,21 @@ def manage_source_repo(
     if (specs_path / ".git").exists():
         print_info(f"Updating existing spec repository in '{specs_dir}'...")
 
-        # Fetch latest
-        success, _ = run_command(["git", "fetch", "origin", branch], cwd=specs_dir)
+        revision = source_commit or branch
+        success, _ = run_command(["git", "fetch", "--depth", "1", "origin", revision], cwd=specs_dir)
         if not success:
-            print_error("Failed to fetch from remote")
+            print_error(f"Failed to fetch source revision: {revision}")
             return False
 
-        # Reset to latest
-        success, _ = run_command(["git", "reset", "--hard", f"origin/{branch}"], cwd=specs_dir)
+        target = source_commit or f"origin/{branch}"
+        checkout_cmd = ["git", "checkout", "--detach", target] if source_commit else ["git", "reset", "--hard", target]
+        success, _ = run_command(checkout_cmd, cwd=specs_dir)
         if not success:
-            print_error("Failed to reset to latest version")
+            print_error(f"Failed to check out source revision: {target}")
             return False
 
-        # Clean untracked files
         run_command(["git", "clean", "-fdx"], cwd=specs_dir)
-
-        print_success("Repository updated to latest version")
+        print_success(f"Repository updated to {target}")
     else:
         print_info("Cloning spec repository (this may take a few minutes)...")
 
@@ -223,13 +227,38 @@ def manage_source_repo(
             print_error("Failed to clone repository")
             return False
 
+        if source_commit:
+            success, _ = run_command(
+                ["git", "fetch", "--depth", "1", "origin", source_commit],
+                cwd=specs_dir,
+            )
+            if not success:
+                print_error(f"Failed to fetch pinned source commit: {source_commit}")
+                return False
+            success, _ = run_command(
+                ["git", "checkout", "--detach", source_commit],
+                cwd=specs_dir,
+            )
+            if not success:
+                print_error(f"Failed to check out pinned source commit: {source_commit}")
+                return False
+
         print_success("Repository cloned successfully")
+
+    if source_commit:
+        success, head = run_command(["git", "rev-parse", "HEAD"], cwd=specs_dir, capture=True)
+        if not success or head.strip().lower() != source_commit.lower():
+            print_error(f"Checked-out revision does not match pinned commit: {source_commit}")
+            return False
 
     # Display stats
     spec_full_path = specs_path / spec_path
     if spec_full_path.exists():
-        json_files = list(spec_full_path.rglob("*.json"))
-        print_info(f"Found {len(json_files)} JSON files in {spec_path}")
+        spec_files = [
+            path for path in spec_full_path.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".json", ".yaml", ".yml"}
+        ]
+        print_info(f"Found {len(spec_files)} JSON/YAML files in {spec_path}")
 
     return True
 
@@ -511,6 +540,7 @@ Examples:
     database_dir = cfg.get("database_dir", _FALLBACK_SOURCE["database_dir"])
     default_spec_path = cfg.get("default_spec_path", _FALLBACK_SOURCE["default_spec_path"])
     branch = args.branch or cfg.get("source_branch", "main")
+    source_commit = "" if args.branch else str(cfg.get("source_commit", "")).strip()
 
     # Derive final spec path
     if args.all:
@@ -542,6 +572,7 @@ Examples:
     print(f"  - Database directory: {database_dir}")
     print(f"  - Specification path: {spec_path}")
     print(f"  - Branch: {branch}")
+    print(f"  - Pinned commit: {source_commit or '(branch head)'}")
     print(f"  - Fresh clone: {args.fresh}")
     print(f"  - Skip DB build: {args.skip_db_build}")
     print()
@@ -551,7 +582,15 @@ Examples:
         sys.exit(1)
 
     # Manage source repo
-    if not manage_source_repo(repo_url, specs_dir, args.fresh, branch, spec_path, args.all):
+    if not manage_source_repo(
+        repo_url,
+        specs_dir,
+        args.fresh,
+        branch,
+        spec_path,
+        args.all,
+        source_commit=source_commit,
+    ):
         sys.exit(1)
 
     # Build database if not skipped

@@ -108,6 +108,10 @@ class TestClassifyPlane:
         result = norm.classify_plane("myvault.vault.azure.net", "/secrets/{name}")
         assert result == "data"
 
+    def test_microsoft_graph_data(self):
+        result = norm.classify_plane("graph.microsoft.com", "/v1.0/users")
+        assert result == "data"
+
     def test_providers_path_heuristic(self):
         # No host but path contains /providers/
         result = norm.classify_plane("", "/subscriptions/{sub}/providers/Microsoft.Storage/storageAccounts")
@@ -158,6 +162,12 @@ class TestIsPreviewVersion:
 
     def test_privatepreview(self):
         assert norm.is_preview_version("2023-01-01-privatepreview") is True
+
+    def test_graph_beta(self):
+        assert norm.is_preview_version("beta") is True
+
+    def test_alpha(self):
+        assert norm.is_preview_version("alpha") is True
 
     def test_stable_date(self):
         assert norm.is_preview_version("2023-01-01") is False

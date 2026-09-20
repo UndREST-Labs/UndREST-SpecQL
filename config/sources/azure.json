@@ -5,6 +5,7 @@
   "specs_dir": "azure-rest-api-specs",
   "database_dir": "database/azure-api-db",
   "default_spec_path": "specification/logic",
+  "export_spec_path": "specification",
   "source_repo": "Azure/azure-rest-api-specs",
   "source_branch": "main",
   "query_packs": [

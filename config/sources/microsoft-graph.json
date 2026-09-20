@@ -1,0 +1,14 @@
+{
+  "id": "microsoft-graph",
+  "name": "Microsoft Graph OpenAPI Metadata",
+  "repo_url": "https://github.com/microsoftgraph/msgraph-metadata.git",
+  "specs_dir": "msgraph-metadata",
+  "database_dir": "database/microsoft-graph-api-db",
+  "default_spec_path": "openapi",
+  "export_spec_path": "openapi",
+  "source_repo": "microsoftgraph/msgraph-metadata",
+  "source_branch": "master",
+  "source_commit": "b8cbef92f6959dca8150bf3edcc650863765e529",
+  "export_profile": "microsoft-graph",
+  "query_packs": []
+}

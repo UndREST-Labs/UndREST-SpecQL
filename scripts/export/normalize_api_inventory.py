@@ -76,6 +76,10 @@ _MANAGEMENT_HOSTS = {
     "management.core.windows.net",
 }
 
+_DATA_HOSTS = {
+    "graph.microsoft.com",
+}
+
 
 def classify_plane(host: str, path_template: str) -> str:
     """Return ``"management"``, ``"data"``, or ``"unknown"`` for an operation.
@@ -92,6 +96,8 @@ def classify_plane(host: str, path_template: str) -> str:
 
     if host_lower in _MANAGEMENT_HOSTS:
         return "management"
+    if host_lower in _DATA_HOSTS:
+        return "data"
 
     if host_lower:
         # Known data-plane host suffixes
@@ -128,7 +134,7 @@ def classify_plane(host: str, path_template: str) -> str:
 # Stability classification
 # ---------------------------------------------------------------------------
 
-_PREVIEW_VERSION_RE = re.compile(r"preview", re.IGNORECASE)
+_PREVIEW_VERSION_RE = re.compile(r"(?:preview|beta|alpha)", re.IGNORECASE)
 
 
 def is_preview_version(api_version: str) -> bool:

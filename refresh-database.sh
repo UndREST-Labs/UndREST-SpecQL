@@ -49,6 +49,7 @@ SPECS_DIR=""
 DATABASE_DIR=""
 DEFAULT_SPEC_PATH=""
 SOURCE_NAME=""
+SOURCE_COMMIT=""
 
 CONFIG_FILE="config/SpeQL.yml"
 
@@ -177,6 +178,7 @@ load_source_config() {
         DATABASE_DIR="database/azure-api-db"
         DEFAULT_SPEC_PATH="specification/logic"
         SOURCE_NAME="Azure REST API Specifications"
+        SOURCE_COMMIT=""
         return
     fi
 
@@ -185,12 +187,18 @@ load_source_config() {
     DATABASE_DIR=$(_json_field "$cfg_file" "database_dir" "database/azure-api-db")
     DEFAULT_SPEC_PATH=$(_json_field "$cfg_file" "default_spec_path" "specification/logic")
     SOURCE_NAME=$(_json_field "$cfg_file" "name" "API Specifications")
+    SOURCE_COMMIT=$(_json_field "$cfg_file" "source_commit" "")
     print_info "Loaded source config: $cfg_file ($SOURCE_NAME)"
 }
 
 # Function to clone or update the source repo
 manage_source_repo() {
     print_info "Managing spec repository: $REPO_URL"
+
+    if [ -n "$SOURCE_COMMIT" ] && [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        print_error "source_commit must be a full 40-character hexadecimal Git SHA"
+        return 1
+    fi
     
     if [ "$FRESH_CLONE" = true ] && [ -d "$SPECS_DIR" ]; then
         print_warning "Removing existing directory '$SPECS_DIR' for fresh clone..."
@@ -201,17 +209,19 @@ manage_source_repo() {
         print_info "Updating existing spec repository in '$SPECS_DIR'..."
         cd "$SPECS_DIR"
         
-        # Fetch latest changes
-        git fetch origin "$BRANCH"
-        
-        # Reset to latest
-        git reset --hard "origin/$BRANCH"
-        
-        # Clean untracked files
+        local revision="${SOURCE_COMMIT:-$BRANCH}"
+        git fetch --depth 1 origin "$revision"
+
+        if [ -n "$SOURCE_COMMIT" ]; then
+            git checkout --detach "$SOURCE_COMMIT"
+        else
+            git reset --hard "origin/$BRANCH"
+        fi
+
         git clean -fdx
-        
+
         cd ..
-        print_success "Repository updated to latest version"
+        print_success "Repository updated to ${SOURCE_COMMIT:-origin/$BRANCH}"
     else
         print_info "Cloning spec repository (this may take a few minutes)..."
         
@@ -225,14 +235,29 @@ manage_source_repo() {
             git sparse-checkout set "$SPEC_PATH"
             cd ..
         fi
-        
+
+        if [ -n "$SOURCE_COMMIT" ]; then
+            git -C "$SPECS_DIR" fetch --depth 1 origin "$SOURCE_COMMIT"
+            git -C "$SPECS_DIR" checkout --detach "$SOURCE_COMMIT"
+        fi
+
         print_success "Repository cloned successfully"
     fi
-    
+
+    if [ -n "$SOURCE_COMMIT" ]; then
+        local checked_out
+        checked_out=$(git -C "$SPECS_DIR" rev-parse HEAD)
+        if [ "${checked_out,,}" != "${SOURCE_COMMIT,,}" ]; then
+            print_error "Checked-out revision does not match pinned commit: $SOURCE_COMMIT"
+            return 1
+        fi
+    fi
+
     # Display stats
     if [ -d "$SPECS_DIR" ]; then
-        local json_count=$(find "$SPECS_DIR/$SPEC_PATH" -name "*.json" 2>/dev/null | wc -l)
-        print_info "Found $json_count JSON files in $SPEC_PATH"
+        local spec_count
+        spec_count=$(find "$SPECS_DIR/$SPEC_PATH" -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | wc -l)
+        print_info "Found $spec_count JSON/YAML files in $SPEC_PATH"
     fi
 }
 
@@ -382,6 +407,9 @@ load_source_config
 
 # Apply overrides from CLI flags
 BRANCH="${BRANCH_OVERRIDE:-$(_json_field "${SOURCE_CONFIG:-$DEFAULT_SOURCE_CONFIG}" source_branch main)}"
+if [ -n "$BRANCH_OVERRIDE" ]; then
+    SOURCE_COMMIT=""
+fi
 
 if [ "$INCLUDE_ALL" = true ]; then
     # Use the top-level spec root directory from default_spec_path
@@ -411,6 +439,7 @@ main() {
     echo "  - Database directory: $DATABASE_DIR"
     echo "  - Specification path: $SPEC_PATH"
     echo "  - Branch: $BRANCH"
+    echo "  - Pinned commit: ${SOURCE_COMMIT:-'(branch head)'}"
     echo "  - Fresh clone: $FRESH_CLONE"
     echo "  - Skip DB build: $SKIP_DB_BUILD"
     echo ""

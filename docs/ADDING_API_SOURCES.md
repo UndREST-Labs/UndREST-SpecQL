@@ -6,8 +6,11 @@ source requires only:
 
 1. A JSON source config file in `config/sources/`
 2. Optionally, platform-specific CodeQL queries in `queries/<platform>-security/`
+3. For unusual source layouts, an existing bounded export profile
 
-No changes to core scripts are needed.
+Most JSON OpenAPI sources require no core changes. Authoritative YAML sources
+require PyYAML, and source-specific route semantics must use an explicitly
+reviewed export profile rather than heuristic metadata invention.
 
 ---
 
@@ -36,8 +39,11 @@ Source configs live in `config/sources/` and follow this schema:
   "specs_dir":         "my-platform-api-specs",
   "database_dir":      "database/my-platform-api-db",
   "default_spec_path": "specification",
+  "export_spec_path": "specification",
   "source_repo":       "MyOrg/my-platform-api-specs",
   "source_branch":     "main",
+  "source_commit":     "<optional-full-commit-sha>",
+  "export_profile":    "generic",
   "query_packs":       ["queries/my-platform-security"]
 }
 ```
@@ -52,8 +58,11 @@ Source configs live in `config/sources/` and follow this schema:
 | `specs_dir` | Yes | — | Local directory where the repo is cloned |
 | `database_dir` | Yes | — | Where to write the CodeQL database |
 | `default_spec_path` | Yes | — | Default subdirectory within `specs_dir` to index |
+| `export_spec_path` | No | `default_spec_path` | Default export scope; use this to preserve a narrower interactive/database default |
 | `source_repo` | No | `"unknown"` | `org/repo` identifier recorded in export metadata |
 | `source_branch` | No | `"main"` | Branch name recorded in export metadata |
+| `source_commit` | No | branch head | Exact full commit SHA to fetch, check out detached, and verify for reproducible acquisition |
+| `export_profile` | No | `"generic"` | Reviewed source-specific exporter profile; currently `generic` or `microsoft-graph` |
 | `query_packs` | No | `["queries/azure-security"]` | List of query pack directories to run against this source's database |
 
 Save the file as `config/sources/<id>.json`.
@@ -70,9 +79,11 @@ python3 refresh_database.py --source-config config/sources/my-platform.json --al
 ./refresh-database.sh --source-config config/sources/my-platform.json --all --skip-db-build
 ```
 
-The `--source-config` flag causes the scripts to read `repo_url`, `specs_dir`,
-`database_dir`, and `default_spec_path` from the config file rather than using
-the built-in Azure defaults.
+The `--source-config` flag causes the refresh scripts to read `repo_url`,
+`specs_dir`, `database_dir`, `default_spec_path`, and optional `source_commit`
+from the config file rather than using the built-in Azure defaults. When
+`source_commit` is present, refresh fetches that exact revision, checks it out
+detached, and verifies `HEAD`.
 
 All other flags (`--fresh`, `--path`, `--branch`, `--clean`, etc.) still work
 as normal and override the config values when provided.
@@ -102,6 +113,7 @@ python3 scripts/export/export_api_inventory.py \
   --output-dir inventory/ \
   --source-repo MyOrg/my-platform-api-specs \
   --source-branch main \
+  --source-profile generic \
   --sharded \
   --minified \
   --verbose
@@ -110,6 +122,29 @@ python3 scripts/export/export_api_inventory.py \
 The `--source-repo` and `--source-branch` arguments are recorded in the export
 metadata so that consumers of the index can trace the data back to its origin.
 When omitted, the values are auto-detected from the git remote.
+
+### Microsoft Graph authoritative export
+
+```bash
+python3 refresh_database.py \
+  --source-config config/sources/microsoft-graph.json \
+  --all \
+  --skip-db-build
+
+python3 scripts/export/export_api_inventory.py \
+  --source-config config/sources/microsoft-graph.json \
+  --output-dir inventory/graph \
+  --sharded \
+  --minified
+```
+
+The source is Microsoft's MIT-licensed
+[`microsoftgraph/msgraph-metadata`](https://github.com/microsoftgraph/msgraph-metadata)
+repository. The profile safely parses the official OpenAPI YAML, includes
+`/v1.0` or `/beta` from each server URL in route templates, classifies the exact
+`graph.microsoft.com` host as data plane, and emits one `Microsoft.Graph`
+provider shard. A single shard is intentional: APISpy can route an exact host
+to one shard without guessing. The profile never fetches remote `$ref` content.
 
 ---
 
@@ -213,6 +248,13 @@ registered sources are:
 | File | Source | Query packs |
 |------|--------|-------------|
 | `azure.json` | `Azure/azure-rest-api-specs` — Microsoft Azure REST API Specifications | `queries/azure-security` |
+| `microsoft-graph.json` | `microsoftgraph/msgraph-metadata` — pinned canonical Graph v1.0/beta OpenAPI | none |
+
+`microsoft-graph.json` pins commit
+`b8cbef92f6959dca8150bf3edcc650863765e529` and uses only
+`openapi/v1.0/openapi.yaml` plus `openapi/beta/openapi.yaml`. Alternate generated
+profiles in those directories are deliberately excluded to avoid duplicate
+routes.
 
 Add your new file to this table when you create it.
 

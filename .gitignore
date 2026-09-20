@@ -41,6 +41,7 @@ Thumbs.db
 # Cloned upstream API spec corpus
 # Owned by: `refresh_database.py`, `refresh-database.sh`, and export/scan workflows
 azure-rest-api-specs/
+msgraph-metadata/
 
 # Generated CodeQL databases and build logs
 # Owned by: `refresh_database.py`, `refresh-database.sh`, and `.github/workflows/speql-security-scan.yml`

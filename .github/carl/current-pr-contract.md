@@ -11,16 +11,18 @@ PR constraints are historical evidence unless they are explicitly
 promoted to durable invariants.
 
 ## Goal
-Add bounded, deterministic API-family/resource-hierarchy and version-lineage metadata to grouped and sharded API inventory exports so APISpy can correlate sibling operations and API-version relationships without receiving prose, examples, raw schemas, or live observations.
+Add deterministic, offline-capable Microsoft Graph OpenAPI ingestion from the authoritative `microsoftgraph/msgraph-metadata` repository, pinned by commit SHA, and produce an APISpy-compatible grouped/sharded export without committing generated artifacts.
 
 ## Contract status
 active
 
 ## Non-goals
-- Do not change CodeQL queries, analyser behaviour, workflows, dependencies, or source configuration.
-- Do not regenerate or commit inventory, database, SARIF, shard, or packaged outputs.
-- Do not change flat inventory schema 2.1.0.
-- Do not resolve remote references, retain examples/descriptions, infer vulnerabilities, or add model/network functionality.
+- Do not change CodeQL queries or analyser behaviour.
+- Do not alter workflow schedules, permissions beyond what publication already requires, or retention periods.
+- Do not commit inventory, database, SARIF, shard, packaged outputs, or the cloned Graph source repository.
+- Do not change flat inventory schema 2.1.0 or grouped/sharded schema 3.2.0.
+- Do not resolve remote references, retain examples/descriptions, infer vulnerabilities, or add model/runtime-network functionality.
+- Do not schedule automatic Graph publication or modify APISpy generated data in this SpecQL phase.
 
 ## Carry-forward rules
 The following constraints from this PR are promoted to durable invariants and must persist into all future PRs:
@@ -30,23 +32,29 @@ The following constraints from this PR are promoted to durable invariants and mu
 - `carl doctor` must remain healthy after any changes to `.github/carl/` artefacts.
 
 ## Approved scope
-- Add compact API-family/resource-hierarchy metadata to grouped/sharded route entries derived from normalised route template segments, provider namespace, and bounded resource-type paths.
-- Add compact version-lineage metadata to grouped/sharded route entries derived from deterministic ordering of version keys and preview/stable classification when derivable from version strings.
-- Preserve the existing bounded auth, parameter-name, request-schema, and response-schema summaries on grouped/sharded version entries.
-- Bump grouped/sharded schema from additive 3.1.0 to additive 3.2.0 while preserving existing fields and route keys.
-- Add focused exporter compatibility, hierarchy, lineage, truncation, omission, and flat-schema tests.
-- Update schema documentation, consumer guidance, export guide, README version references if present, and durable cARL architecture notes.
+- Register `microsoftgraph/msgraph-metadata` as an authoritative source pinned to commit `b8cbef92f6959dca8150bf3edcc650863765e529`.
+- Extend source refresh configuration with optional exact-commit checkout support.
+- Add safe YAML ingestion using `yaml.safe_load`; PyYAML is justified because the authoritative 44–70 MB OpenAPI documents are YAML and the standard library has no YAML parser.
+- Auto-select a bounded `microsoft-graph` export profile from the authoritative source repository identifier, while retaining an explicit CLI override.
+- Include OpenAPI server base paths (`/v1.0` and `/beta`) in exported route templates, classify the exact Graph host as data plane, and group Graph operations into one `Microsoft.Graph` shard compatible with APISpy's fail-closed host routing.
+- Preserve OData parameter names, local-reference-only schema summarisation, deterministic ordering, existing schemas, and all Azure behaviour.
+- Add focused fixtures/tests, source and export documentation, and durable cARL notes.
+- Generate a local ignored candidate export for validation; do not commit it.
+- Compute a semantic content hash that excludes volatile `generated_at` metadata.
+- Restore the last changed-export hash from a tiny Actions cache and upload export artifacts, publish releases, and dispatch APISpy updates only when semantic content changed.
 
 ## Intentional amendments
-- Supersedes the completed generated-artefact-boundary hardening scope.
-- User-approved continuation of the UndREST research-platform implementation permits this bounded exporter change.
+- Supersedes the completed SpecQL 3.2.0 family/lineage phase.
+- User approval to “do it” explicitly authorises this bounded source-config, exporter, dependency, documentation, and local candidate-generation work.
+- APISpy bundling remains a subsequent separately governed phase after the candidate export is validated.
 
 ## Forbidden scope
-- Modifying CodeQL queries, analyser/runtime entry points, workflows, source configs, or dependencies.
-- Regenerating or editing generated database, SARIF, JSON inventory, shard, or packaged artefacts.
+- Modifying CodeQL queries, analyser behaviour, workflow schedules, or generated committed artifacts.
+- Committing the cloned Graph metadata repository or generated inventory output.
 - Breaking flat 2.1.0 or existing grouped/sharded route and version fields.
 - Exporting raw examples, descriptions, defaults, credentials, or unrestricted schema content.
-- Adding speculative vulnerability labels or API-specific hard-coding.
+- Fetching remote `$ref` content or deriving routes from anything except the pinned authoritative OpenAPI documents.
+- Adding speculative vulnerability labels or Graph endpoint metadata not present in the source.
 
 ## Architectural constraints
 - Static API knowledge remains owned by SpecQL; observations and findings remain owned by APISpy.
@@ -64,33 +72,51 @@ The following constraints from this PR are promoted to durable invariants and mu
 ## Files expected to change
 - `.github/carl/current-pr-contract.md`
 - `.github/carl/memory.md`
+- `.github/carl/plans/microsoft-graph-authoritative-export.md`
+- `.gitignore`
+- `requirements.txt`
+- `config/sources/microsoft-graph.json`
+- `config/sources/azure.json`
+- `refresh_database.py`
+- `refresh-database.sh`
 - `scripts/export/export_api_inventory.py`
+- `scripts/export/hash_inventory.py`
+- `scripts/export/normalize_api_inventory.py`
+- `.github/workflows/daily-api-index-export.yml`
+- `.github/workflows/daily-api-index-export-sharded.yml`
 - `tests/test_api_inventory_export.py`
 - `tests/test_api_inventory_normalization.py`
+- `tests/test_refresh_database.py`
+- `tests/test_inventory_hash.py`
+- `docs/ADDING_API_SOURCES.md`
 - `docs/inventory/API_INDEX_SCHEMA.md`
-- `docs/inventory/CONSUMER_GUIDE.md`
 - `docs/inventory/EXPORT_PIPELINE.md`
-- `README.md` if it states grouped/sharded schema version
+- `README.md`
 
 ## Tests / validation
-- `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py -v`
-- Confirm flat output remains schema 2.1.0 and does not contain new grouped-only metadata.
-- Confirm grouped and sharded output use schema 3.2.0 with optional bounded metadata.
-- Confirm malformed/cyclic local references do not fail export.
-- Confirm API-family/resource-hierarchy metadata, version-lineage ordering, preview/stable classification, truncation markers, omission when empty, and flat-output stability.
-- Confirm no generated artefacts appear in git status.
-- Run `python3 -m compileall` on changed Python files, `git diff --check`, and `carl doctor` when available.
+- `python3 -m pytest tests/test_api_inventory_export.py tests/test_api_inventory_normalization.py tests/test_refresh_database.py tests/test_inventory_hash.py -v`
+- `python3 -m pytest -q`
+- `bash -n refresh-database.sh`
+- Parse both modified workflow YAML files.
+- Confirm identical semantic exports with different timestamps hash equally and changed routes hash differently.
+- Confirm artifact upload, shard release publication, and APISpy dispatch are all gated by the content-change output.
+- Confirm JSON/Azure behavior remains unchanged and schemas remain 2.1.0/3.2.0.
+- Confirm YAML uses safe loading and fails clearly when PyYAML is unavailable.
+- Confirm Graph host, `/v1.0` and `/beta` prefixes, preview classification, OData parameters, fixed provider namespace, deterministic shard name, and pinned provenance.
+- Generate a local ignored Graph candidate and inspect route/provider/version counts without committing artifacts.
+- Run `python3 -m compileall` on changed Python files, `git diff --check`, protected-path checks, and `carl doctor`.
 
 ## Stop conditions
-- Metadata requires remote reference fetching or new dependencies.
-- Existing route identity, matching keys, or flat output would need a breaking change.
-- Generated inventory, database, SARIF, or shard artefacts appear in git status.
+- The pinned authoritative source is unavailable or its license/provenance cannot be verified.
+- Existing Azure route identity, matching keys, or schemas regress.
+- YAML parsing requires unsafe loading or remote-reference resolution.
+- Generated inventory, database, source clone, SARIF, or shard artifacts become tracked.
 - A secret or raw example/default value would be retained.
 
 ## Escalation triggers
-- Any need to modify workflows, CodeQL queries, analyser logic, dependencies, or source configs.
-- Any proposed metadata whose semantics cannot be derived deterministically from the specification.
-- Any need for a breaking grouped/sharded schema version.
+- Any need to modify workflows, CodeQL queries, or analyser logic.
+- Any need for a breaking schema version or multiple Graph shards unsupported by APISpy routing.
+- Any source other than the pinned official Microsoft Graph metadata repository is required.
 
 ## Context reset notes
-This contract covers the additive SpecQL 3.2.0 sibling-correlation metadata phase for SpecQL exports only. APISpy consumption is out of scope for this phase.
+This contract covers authoritative Microsoft Graph source acquisition and SpecQL export only. APISpy generated-pack integration begins only after this phase produces and validates a local candidate.

@@ -2,7 +2,7 @@
 """
 export_api_inventory.py — SpecRecon API Inventory Export
 
-Walks a directory of OpenAPI/Swagger JSON spec files, parses every operation, and
+Walks a directory of OpenAPI/Swagger spec files, parses every operation, and
 produces a normalized api-index.json that can be used for "spec vs reality"
 comparison of REST API calls.
 
@@ -14,10 +14,12 @@ Usage:
     python3 scripts/export/export_api_inventory.py [options]
 
 Options:
-    --source        Path to the specifications directory (default: azure-rest-api-specs/specification)
+    --source-config Optional source config for path, provenance, and profile
+    --source        Path to the specifications directory (default: config or azure-rest-api-specs/specification)
     --output-dir    Directory where the output files are written (default: inventory/)
     --source-repo   Upstream repository identifier recorded in metadata (e.g. Azure/azure-rest-api-specs)
     --source-branch Branch name recorded in metadata (default: main)
+    --source-profile Source-specific parsing profile (default: auto)
     --minified      Also produce a minified api-index.min.json (no indentation)
     --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.2.0)
     --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.2.0)
@@ -41,6 +43,12 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised through dependency-failure tests
+    yaml = None
 
 # Allow running as a standalone script or as a package member
 _HERE = Path(__file__).parent
@@ -79,6 +87,16 @@ _MAX_RESOURCE_TYPE_SEGMENTS = 20
 # run_export() without passing explicit source metadata still work.
 _DEFAULT_SOURCE_REPO = "unknown"
 _DEFAULT_SOURCE_BRANCH = "main"
+
+_SOURCE_PROFILE_AUTO = "auto"
+_SOURCE_PROFILE_GENERIC = "generic"
+_SOURCE_PROFILE_MICROSOFT_GRAPH = "microsoft-graph"
+_MICROSOFT_GRAPH_SOURCE_REPO = "microsoftgraph/msgraph-metadata"
+_MICROSOFT_GRAPH_PROVIDER_NAMESPACE = "Microsoft.Graph"
+_MICROSOFT_GRAPH_OPENAPI_PATHS = frozenset({
+    "v1.0/openapi.yaml",
+    "beta/openapi.yaml",
+})
 
 # Directories whose contents should be skipped entirely
 _SKIP_DIRS = {
@@ -163,15 +181,28 @@ def _should_skip_dir(dir_name: str) -> bool:
     return dir_name.lower() in _SKIP_DIRS
 
 
-def discover_spec_files(source_dir: Path) -> list:
-    """Yield all JSON spec files under *source_dir*, skipping skip-listed dirs."""
+def discover_spec_files(
+    source_dir: Path,
+    include_yaml: bool = False,
+    allowed_relative_paths: set = None,
+) -> list:
+    """Yield supported spec files under *source_dir*, skipping excluded dirs."""
+    suffixes = {".json"}
+    if include_yaml:
+        suffixes.update({".yaml", ".yml"})
+
     spec_files = []
     for root, dirs, files in os.walk(source_dir):
         # Prune directories in-place so os.walk doesn't descend into them
         dirs[:] = [d for d in dirs if not _should_skip_dir(d)]
         for fname in files:
-            if fname.endswith(".json"):
-                spec_files.append(Path(root) / fname)
+            candidate = Path(root) / fname
+            if candidate.suffix.lower() not in suffixes:
+                continue
+            relative = candidate.relative_to(source_dir).as_posix()
+            if allowed_relative_paths is not None and relative not in allowed_relative_paths:
+                continue
+            spec_files.append(candidate)
     return spec_files
 
 
@@ -233,12 +264,77 @@ def _detect_host(spec: dict, file_path: Path) -> str:
     if servers and isinstance(servers, list):
         first_url = servers[0].get("url", "") if isinstance(servers[0], dict) else ""
         if first_url:
-            # Strip scheme and path to get just the host
-            stripped = first_url.split("//", 1)[-1].split("/")[0].strip()
-            if stripped:
-                return stripped.lower()
+            parsed = urlsplit(first_url)
+            if parsed.hostname:
+                return parsed.hostname.lower()
 
     return "unknown"
+
+
+def _detect_server_base_path(spec: dict) -> str:
+    """Return a normalized base path from Swagger/OpenAPI server metadata."""
+    base_path = spec.get("basePath", "")
+    if isinstance(base_path, str) and base_path.strip("/"):
+        return "/" + base_path.strip("/")
+
+    servers = spec.get("servers", [])
+    if isinstance(servers, list) and servers and isinstance(servers[0], dict):
+        server_url = servers[0].get("url", "")
+        if isinstance(server_url, str):
+            path = urlsplit(server_url).path
+            if path and path != "/":
+                return "/" + path.strip("/")
+    return ""
+
+
+def _join_server_path(base_path: str, path_template: str) -> str:
+    """Join a server base path and OpenAPI path without changing placeholders."""
+    if not base_path:
+        return path_template
+    normalized_path = "/" + str(path_template or "").lstrip("/")
+    if normalized_path == base_path or normalized_path.startswith(base_path + "/"):
+        return normalized_path
+    return base_path.rstrip("/") + normalized_path
+
+
+def _resolve_source_profile(source_profile: str, source_repo: str) -> str:
+    """Resolve an explicit or source-derived export profile."""
+    profile = source_profile or _SOURCE_PROFILE_AUTO
+    if profile != _SOURCE_PROFILE_AUTO:
+        return profile
+    if str(source_repo or "").lower() == _MICROSOFT_GRAPH_SOURCE_REPO:
+        return _SOURCE_PROFILE_MICROSOFT_GRAPH
+    return _SOURCE_PROFILE_GENERIC
+
+
+def _load_export_source_config(config_path: Path) -> dict:
+    """Load and validate an exporter source configuration file."""
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            config = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot load source config {config_path}: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError(f"Source config must be a JSON object: {config_path}")
+    return config
+
+
+def _load_spec_document(file_path: Path):
+    """Load a JSON or YAML spec document without resolving external content."""
+    suffix = file_path.suffix.lower()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            if suffix in {".yaml", ".yml"}:
+                if yaml is None:
+                    raise RuntimeError("PyYAML is required to parse OpenAPI YAML files")
+                return yaml.safe_load(fh)
+            return json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON decode error in {file_path}: {exc}") from exc
+    except Exception as exc:
+        if yaml is not None and isinstance(exc, yaml.YAMLError):
+            raise ValueError(f"YAML decode error in {file_path}: {exc}") from exc
+        raise
 
 
 def _resolve_local_ref(spec: dict, value, seen: set = None):
@@ -561,6 +657,7 @@ def _parse_spec_file(
     source_dir: Path,
     verbose: bool,
     include_research_metadata: bool = False,
+    source_profile: str = _SOURCE_PROFILE_GENERIC,
 ) -> tuple:
     """Parse a single spec file and return (list_of_operations, error_or_None).
 
@@ -574,12 +671,9 @@ def _parse_spec_file(
         rel_path = file_path
 
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-            spec = json.load(fh)
-    except json.JSONDecodeError as exc:
-        return [], f"JSON decode error in {file_path}: {exc}"
-    except OSError as exc:
-        return [], f"Cannot read {file_path}: {exc}"
+        spec = _load_spec_document(file_path)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return [], str(exc)
 
     if not isinstance(spec, dict):
         return [], None  # Not a spec object — skip silently
@@ -591,6 +685,11 @@ def _parse_spec_file(
         return [], None  # Not a recognized OpenAPI spec — skip
 
     host = _detect_host(spec, file_path)
+    server_base_path = (
+        _detect_server_base_path(spec)
+        if source_profile == _SOURCE_PROFILE_MICROSOFT_GRAPH
+        else ""
+    )
     api_version_from_path = extract_api_version_from_path(str(file_path))
     api_version_from_info = spec.get("info", {}).get("version", "")
     api_version = api_version_from_path if api_version_from_path != "unknown" else api_version_from_info
@@ -609,10 +708,15 @@ def _parse_spec_file(
         # "paths" | "x-ms-paths" | "other" — recorded as provenance in each op entry
         source_kind = detect_source_kind(paths_block_key)
 
-        for path_template, path_item in paths_obj.items():
+        for raw_path_template, path_item in paths_obj.items():
             if not isinstance(path_item, dict):
                 continue
 
+            path_template = (
+                _join_server_path(server_base_path, raw_path_template)
+                if source_profile == _SOURCE_PROFILE_MICROSOFT_GRAPH
+                else raw_path_template
+            )
             http_methods = ["get", "put", "post", "delete", "options", "head", "patch", "trace"]
             for method_lower in http_methods:
                 operation = path_item.get(method_lower)
@@ -640,6 +744,8 @@ def _parse_spec_file(
                     "is_preview": preview,
                     "lookup_key": lookup_key,
                 }
+                if source_profile == _SOURCE_PROFILE_MICROSOFT_GRAPH:
+                    entry["_provider_namespace"] = _MICROSOFT_GRAPH_PROVIDER_NAMESPACE
                 if include_research_metadata:
                     entry["_research_metadata"] = _operation_research_metadata(path_item, operation, spec)
                 operations.append(entry)
@@ -657,7 +763,7 @@ def _parse_spec_file(
 def _build_summary(operations: list, spec_file_count: int, error_count: int) -> dict:
     provider_set = set()
     for op in operations:
-        ns = extract_provider_namespace(op["path_template"])
+        ns = op.get("_provider_namespace") or extract_provider_namespace(op["path_template"])
         if ns != "unknown":
             provider_set.add(ns)
     providers = sorted(provider_set)
@@ -855,7 +961,7 @@ def _build_grouped_index(flat_ops: list) -> dict:
         host = op["host"]
         method = op["method"]
         path_template = op["path_template"]
-        provider_ns = extract_provider_namespace(path_template)
+        provider_ns = op.get("_provider_namespace") or extract_provider_namespace(path_template)
         route_key = f"{method} {normalize_path_template_for_key(path_template)}"
 
         # Navigate / create the nested slots
@@ -1067,6 +1173,7 @@ def run_export(
     sharded: bool = False,
     source_repo: str = "",
     source_branch: str = "",
+    source_profile: str = _SOURCE_PROFILE_AUTO,
 ) -> int:
     """Execute the full export pipeline.  Returns an exit code (0 = success).
 
@@ -1081,6 +1188,8 @@ def run_export(
                        metadata).  Auto-detected from git when empty.
         source_branch: Branch name used to clone the source repo (recorded in
                        metadata).  Defaults to "main" when empty.
+        source_profile: Source-specific deterministic parsing profile. "auto"
+                        selects Microsoft Graph only for its official repository.
     """
 
     print(f"[SpecRecon] Starting API inventory export")
@@ -1102,6 +1211,8 @@ def run_export(
         source_repo = _detect_source_repo(source_dir)
 
     resolved_source_branch = source_branch or _DEFAULT_SOURCE_BRANCH
+    resolved_source_profile = _resolve_source_profile(source_profile, source_repo)
+    print(f"[SpecRecon] Profile: {resolved_source_profile}")
 
     metadata = {
         "generated_at": generated_at,
@@ -1116,8 +1227,13 @@ def run_export(
 
     # Discover spec files
     print(f"[SpecRecon] Scanning spec files …")
-    spec_files = discover_spec_files(source_dir)
-    print(f"[SpecRecon] Found {len(spec_files)} JSON files to inspect")
+    is_graph_profile = resolved_source_profile == _SOURCE_PROFILE_MICROSOFT_GRAPH
+    spec_files = discover_spec_files(
+        source_dir,
+        include_yaml=is_graph_profile,
+        allowed_relative_paths=set(_MICROSOFT_GRAPH_OPENAPI_PATHS) if is_graph_profile else None,
+    )
+    print(f"[SpecRecon] Found {len(spec_files)} spec files to inspect")
 
     all_operations = []
     errors = []
@@ -1130,6 +1246,7 @@ def run_export(
             source_dir,
             verbose,
             include_research_metadata=grouped or sharded,
+            source_profile=resolved_source_profile,
         )
         if err:
             errors.append(err)
@@ -1229,9 +1346,15 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--source-config",
+        default="",
+        metavar="PATH",
+        help="Optional source config used to derive source path, provenance, and export profile",
+    )
+    parser.add_argument(
         "--source",
-        default="azure-rest-api-specs/specification",
-        help="Path to the specifications directory (default: azure-rest-api-specs/specification)",
+        default="",
+        help="Path to the specifications directory (default: source config or azure-rest-api-specs/specification)",
     )
     parser.add_argument(
         "--output-dir",
@@ -1255,6 +1378,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Branch name recorded in the export metadata (e.g. 'main'). "
             "Defaults to 'main' when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--source-profile",
+        choices=[
+            _SOURCE_PROFILE_AUTO,
+            _SOURCE_PROFILE_GENERIC,
+            _SOURCE_PROFILE_MICROSOFT_GRAPH,
+        ],
+        default=_SOURCE_PROFILE_AUTO,
+        help=(
+            "Source-specific parsing profile. 'auto' selects microsoft-graph "
+            "only for source_repo microsoftgraph/msgraph-metadata."
         ),
     )
     parser.add_argument(
@@ -1292,8 +1428,37 @@ def main():
     parser = _build_parser()
     args = parser.parse_args()
 
-    source_dir = Path(args.source).expanduser().resolve()
+    config = {}
+    if args.source_config:
+        try:
+            config = _load_export_source_config(Path(args.source_config).expanduser())
+        except ValueError as exc:
+            parser.error(str(exc))
+
+    configured_source = ""
+    if config:
+        specs_dir = str(config.get("specs_dir", "")).strip()
+        spec_path = str(
+            config.get("export_spec_path", config.get("default_spec_path", ""))
+        ).strip()
+        if specs_dir:
+            configured_source = str(Path(specs_dir) / spec_path) if spec_path else specs_dir
+
+    source_dir = Path(
+        args.source or configured_source or "azure-rest-api-specs/specification"
+    ).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
+    source_repo = args.source_repo or str(config.get("source_repo", ""))
+    source_branch = args.source_branch or str(config.get("source_branch", ""))
+    source_profile = args.source_profile
+    if source_profile == _SOURCE_PROFILE_AUTO and config.get("export_profile"):
+        source_profile = str(config["export_profile"])
+    if source_profile not in {
+        _SOURCE_PROFILE_AUTO,
+        _SOURCE_PROFILE_GENERIC,
+        _SOURCE_PROFILE_MICROSOFT_GRAPH,
+    }:
+        parser.error(f"Unsupported export_profile in source config: {source_profile}")
 
     sys.exit(run_export(
         source_dir,
@@ -1302,8 +1467,9 @@ def main():
         args.verbose,
         args.grouped,
         args.sharded,
-        source_repo=args.source_repo,
-        source_branch=args.source_branch,
+        source_repo=source_repo,
+        source_branch=source_branch,
+        source_profile=source_profile,
     ))
 
 
