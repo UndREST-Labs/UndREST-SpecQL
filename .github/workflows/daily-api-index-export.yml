@@ -16,6 +16,10 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: inventory-grouped-${{ github.event.inputs.source_config || 'config/sources/azure.json' }}
+  cancel-in-progress: false
+
 jobs:
   export-api-index:
     runs-on: ubuntu-latest

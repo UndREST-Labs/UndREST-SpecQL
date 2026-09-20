@@ -41,7 +41,8 @@ The following constraints from this PR are promoted to durable invariants and mu
 - Add focused fixtures/tests, source and export documentation, and durable cARL notes.
 - Generate a local ignored candidate export for validation; do not commit it.
 - Compute a semantic content hash that excludes volatile `generated_at` metadata.
-- Restore the last changed-export hash from a tiny Actions cache and upload export artifacts, publish releases, and dispatch APISpy updates only when semantic content changed.
+- Restore the last changed-export hash from a tiny Actions cache and upload export artifacts only when semantic content changed.
+- Serialize per-source workflow runs to prevent duplicate publication races; only sources explicitly configured for APISpy publication may replace the stable release asset and dispatch updates.
 
 ## Intentional amendments
 - Supersedes the completed SpecQL 3.2.0 family/lineage phase.

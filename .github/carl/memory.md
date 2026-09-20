@@ -73,7 +73,7 @@ Refresh scripts accept `--source-config config/sources/<platform>.json` to suppo
 - Minified variants (`*.min.json`) with `--minified`
 - Packaged sharded export ZIPs for release publication
 
-Published to UndREST-APISpy via GitHub Releases. Export workflows compute semantic SHA-256 hashes with volatile `generated_at` metadata removed and only upload artifacts, replace the shard release, or dispatch APISpy when content changed; a tiny Actions cache stores the last changed hash.
+Published to UndREST-APISpy via a stable GitHub Release asset only for sources with `publish_to_apispy: true`. Export workflows serialize per-source runs, compute semantic SHA-256 hashes with volatile `generated_at` removed, and only upload artifacts, replace the release, or dispatch APISpy when content changed; a tiny Actions cache stores the last changed hash.
 
 ### GitHub Actions workflows
 

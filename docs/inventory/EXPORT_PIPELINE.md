@@ -136,8 +136,11 @@ A GitHub Actions workflow at `.github/workflows/daily-api-index-export.yml`
 runs the export automatically every day at 04:00 UTC. Both export workflows
 compute a semantic SHA-256 over canonical JSON with volatile `generated_at`
 metadata removed. They restore the last changed-export hash from a small Actions
-cache and upload a new artifact only when content differs. The sharded workflow
-also skips release replacement and APISpy dispatch for unchanged output.
+cache and upload a new artifact only when content differs. Runs are serialized
+per source and export format so concurrent jobs cannot publish the same change
+twice. The sharded workflow also skips release replacement and APISpy dispatch
+for unchanged output, and only sources explicitly configured with
+`publish_to_apispy: true` may replace the shared APISpy release.
 
 To trigger the workflow manually from the GitHub UI:
 1. Navigate to **Actions → Daily API Index Export**

@@ -59,6 +59,7 @@ Source configs live in `config/sources/` and follow this schema:
 | `database_dir` | Yes | — | Where to write the CodeQL database |
 | `default_spec_path` | Yes | — | Default subdirectory within `specs_dir` to index |
 | `export_spec_path` | No | `default_spec_path` | Default export scope; use this to preserve a narrower interactive/database default |
+| `publish_to_apispy` | No | `false` | Allow the sharded workflow to replace the shared APISpy release and dispatch an update |
 | `source_repo` | No | `"unknown"` | `org/repo` identifier recorded in export metadata |
 | `source_branch` | No | `"main"` | Branch name recorded in export metadata |
 | `source_commit` | No | branch head | Exact full commit SHA to fetch, check out detached, and verify for reproducible acquisition |

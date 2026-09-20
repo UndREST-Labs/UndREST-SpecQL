@@ -8,6 +8,7 @@
   "export_spec_path": "specification",
   "source_repo": "Azure/azure-rest-api-specs",
   "source_branch": "main",
+  "publish_to_apispy": true,
   "query_packs": [
     "queries/azure-security"
   ]

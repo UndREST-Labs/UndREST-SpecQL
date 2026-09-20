@@ -291,11 +291,11 @@ node apispy/tests/test_matcher.js
 
 ### Re-bundle provider shards
 ```bash
-# Populate from a SpecRecon zip export (all shards, no size limit)
-python3 apispy/scripts/prepare_data.py --zip inventory/api-index-sharded-<run-id>.zip
+# Populate from the stable SpecRecon release export (all shards, no size limit)
+python3 apispy/scripts/prepare_data.py --zip inventory/api-index-sharded.zip
 
 # Optional: exclude shards larger than N KB
-python3 apispy/scripts/prepare_data.py --zip inventory/api-index-sharded-<run-id>.zip --size-limit 100
+python3 apispy/scripts/prepare_data.py --zip inventory/api-index-sharded.zip --size-limit 100
 ```
 
 Reload the unpacked extension in Chrome after re-bundling to pick up new data.  

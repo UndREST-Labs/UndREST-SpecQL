@@ -205,7 +205,7 @@ UndREST-SpecQL/
 │       ├── CONSUMER_GUIDE.md
 │       └── EXPORT_PIPELINE.md
 ├── inventory/                  # Export artifacts (generated)
-│   └── api-index-sharded-<run-id>.zip
+│   └── api-index-sharded.zip
 ├── queries/                    # CodeQL queries — one subdirectory per platform
 │   ├── README.md               # How to add queries for a new platform
 │   └── azure-security/
@@ -434,7 +434,7 @@ python3 scripts/export/export_api_inventory.py \
 - `api-index-grouped.json` — Grouped/deduplicated (schema 3.2.0; additive auth/parameter/schema summaries plus API-family and version-lineage metadata)
 - `shards/{Provider.Namespace}.min.json` — Per-provider shards for APISpy
 
-**Cross-repo pipeline:** The `daily-api-index-export-sharded.yml` workflow runs nightly and computes a semantic content hash with volatile generation timestamps removed. It publishes the sharded zip, stores an Actions artifact, and triggers [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) only when the export differs from the last changed export. The grouped workflow applies the same deduplication before artifact upload.
+**Cross-repo pipeline:** The `daily-api-index-export-sharded.yml` workflow runs nightly and computes a semantic content hash with volatile generation timestamps removed. Per-source runs are serialized to prevent duplicate publication races. For sources explicitly configured with `publish_to_apispy: true`, it replaces the stable sharded release asset and triggers [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) only when the export differs from the last changed export. The grouped workflow applies the same deduplication before artifact upload.
 
 See [docs/inventory/EXPORT_PIPELINE.md](docs/inventory/EXPORT_PIPELINE.md) for the full schema and consumer guide.
 

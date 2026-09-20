@@ -16,6 +16,10 @@ on:
         required: false
         default: ''
 
+concurrency:
+  group: inventory-sharded-${{ github.event.inputs.source_config || 'config/sources/azure.json' }}
+  cancel-in-progress: false
+
 jobs:
   export-api-index-sharded:
     runs-on: ubuntu-latest
@@ -44,9 +48,13 @@ jobs:
           SOURCE_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('id','unknown'))")
           SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
           SOURCE_REPO=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_repo','unknown'))")
+          SOURCE_NAME=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('name', cfg.get('id','unknown')))")
+          PUBLISH_TO_APISPY=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(str(bool(cfg.get('publish_to_apispy', False))).lower())")
           echo "source_id=${SOURCE_ID}" >> "$GITHUB_OUTPUT"
           echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
           echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
+          echo "source_name=${SOURCE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "publish_to_apispy=${PUBLISH_TO_APISPY}" >> "$GITHUB_OUTPUT"
 
       - name: Clone / update spec repository
         run: |
@@ -105,13 +113,13 @@ jobs:
           fi
 
       - name: Package changed shard export
-        if: steps.content.outputs.changed == 'true'
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true'
         run: |
           cd inventory
-          zip -q -r "api-index-sharded-${{ github.run_id }}.zip" shards/
+          zip -q -r "api-index-sharded.zip" shards/
 
       - name: Publish shards to GitHub Release
-        if: steps.content.outputs.changed == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -121,16 +129,16 @@ jobs:
 
           # Create release if it doesn't exist, then upload/overwrite assets
           if gh release view shards-latest > /dev/null 2>&1; then
-            gh release upload shards-latest inventory/api-index-sharded-*.zip --clobber
+            gh release upload shards-latest inventory/api-index-sharded.zip --clobber
           else
-            gh release create shards-latest inventory/api-index-sharded-*.zip \
+            gh release create shards-latest inventory/api-index-sharded.zip \
               --title "Latest API Shards" \
               --notes "$NOTES" \
               --latest
           fi
 
       - name: Trigger APISpy shard update
-        if: steps.content.outputs.changed == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.APISPY_DISPATCH_TOKEN }}" \
@@ -143,6 +151,10 @@ jobs:
               "client_payload": {
                 "run_id": "${{ github.run_id }}",
                 "tag": "shards-latest",
+                "source_id": "${{ steps.source.outputs.source_id }}",
+                "pack_id": "${{ steps.source.outputs.source_id }}",
+                "pack_name": "${{ steps.source.outputs.source_name }}",
+                "platform": "azure",
                 "triggered_by": "${{ github.event_name }}"
               }
             }'
@@ -152,7 +164,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: api-index-sharded-${{ github.run_id }}
-          path: inventory/
+          path: |
+            inventory/
+            !inventory/api-index-sharded.zip
           retention-days: 2
 
       - name: Save changed-export hash
