@@ -13,7 +13,7 @@ The export pipeline produces two formats:
 | File | Schema | Best for |
 |------|--------|----------|
 | `api-index.json` | `2.1.0` | Tooling that processes every operation individually (analysis scripts, grep, jq) |
-| `api-index-grouped.json` | `3.0.0` | Runtime consumers that need compact, pre-grouped data (browser extensions, proxies) |
+| `api-index-grouped.json` | `3.1.0` | Runtime consumers that need compact, pre-grouped data and optional research metadata (browser extensions, proxies) |
 
 This guide focuses on the **grouped format** (`api-index-grouped.json`), which is
 the recommended format for size-sensitive consumers.  The flat format is documented
@@ -193,7 +193,7 @@ for ns, prov in index["providers"].items():
 
 - `metadata.generated_at` — when the index was produced
 - `metadata.source_commit` — the exact Azure REST API specs commit used
-- `metadata.schema_version` — `"3.0.0"` for the grouped format; check before processing
+- `metadata.schema_version` — `"3.1.0"` for current grouped/sharded exports; 3.0.0 consumers can ignore additive research fields
 - `metadata.export_format` — `"grouped"` (distinguishes from flat format files)
 
 The index is regenerated daily by the SpecRecon CI workflow.

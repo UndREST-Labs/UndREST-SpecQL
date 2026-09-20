@@ -7,8 +7,8 @@ Two formats are available:
 | File | Schema version | Flag | Description |
 |------|---------------|------|-------------|
 | `api-index.json` / `api-index.min.json` | `2.1.0` | _(default)_ | Flat array — one entry per HTTP operation found |
-| `api-index-grouped.json` / `api-index-grouped.min.json` | `3.0.0` | `--grouped` | Grouped/deduplicated — routes nested by provider → host → route → version |
-| `shards/{Provider.Namespace}.json` / `shards/{Provider.Namespace}.min.json` | `3.0.0` | `--sharded` | Per-provider shard — same grouped structure scoped to one provider namespace |
+| `api-index-grouped.json` / `api-index-grouped.min.json` | `3.1.0` | `--grouped` | Grouped/deduplicated — routes nested by provider → host → route → version |
+| `shards/{Provider.Namespace}.json` / `shards/{Provider.Namespace}.min.json` | `3.1.0` | `--sharded` | Per-provider shard — same grouped structure scoped to one provider namespace |
 
 > **Why the grouped format?**
 > The flat format repeats `host`, `provider_namespace`, `method`, `path_template`,
@@ -104,7 +104,7 @@ Each element represents one HTTP operation (method + path) found in a spec file.
 
 ---
 
-## Grouped Format — `api-index-grouped.json` (schema `3.0.0`)
+## Grouped Format — `api-index-grouped.json` (schema `3.1.0`)
 
 ### Top-Level Structure
 
@@ -122,7 +122,7 @@ Same fields as the flat metadata, with two additions:
 
 ```json
 {
-  "schema_version": "3.0.0",
+  "schema_version": "3.1.0",
   "export_format": "grouped"
 }
 ```
@@ -171,7 +171,25 @@ providers
   "is_preview": false,
   "spec_files": ["storage/resource-manager/Microsoft.Storage/stable/2023-01-01/storage.json"],
   "operation_ids": ["StorageAccounts_GetProperties"],
-  "source_kinds": ["paths"]
+  "source_kinds": ["paths"],
+  "auth": {
+    "status": "required",
+    "requirements": [{"azure_auth": ["user_impersonation"]}],
+    "schemes": [{"name": "azure_auth", "type": "oauth2"}]
+  },
+  "parameters": {
+    "path": ["accountName", "resourceGroupName", "subscriptionId"],
+    "query": ["api-version"]
+  },
+  "request_schemas": [],
+  "response_schemas": [
+    {
+      "fingerprint": "sha256:0123456789abcdef01234567",
+      "type": "object",
+      "top_level_fields": [{"name": "id", "type": "string", "required": false}],
+      "status_codes": ["200"]
+    }
+  ]
 }
 ```
 
@@ -181,6 +199,12 @@ providers
 | `spec_files`   | array   | Relative paths to all spec files that define this route at this version |
 | `operation_ids`| array   | `operationId` values found at this version (deduplicated) |
 | `source_kinds` | array   | Which paths blocks contributed: `"paths"`, `"x-ms-paths"` (deduplicated) |
+| `auth` | object | Documented auth status (`required`, `optional_or_anonymous`, `unspecified`, or `mixed`), requirement alternatives, and referenced scheme descriptors |
+| `parameters` | object | Bounded parameter-name arrays grouped by location (`query`, `path`, `header`, `cookie`) |
+| `request_schemas` | array | Deduplicated bounded request-body schema summaries with structural fingerprints |
+| `response_schemas` | array | Deduplicated bounded response schema summaries with status codes and content types |
+
+These additive fields are omitted when the specification provides no corresponding metadata. Schema fingerprints are SHA-256 hashes of a canonical, bounded structural shape. The shape includes types, formats, required-property state, property names, arrays, object additional-property structure, and composition keywords. Top-level field summaries union `allOf` fields and conservatively include fields from `oneOf`/`anyOf` alternatives to avoid false undocumented-field signals. Descriptions, examples, defaults, enum values, and raw schema documents are excluded. Only local JSON references are resolved; external or cyclic references are represented by safe marker types.
 
 > **Size win:** a route that appears in 10 spec versions goes from 10 flat entries
 > (each repeating host, method, path_template, spec_file, plane, …) to 1 route
@@ -262,10 +286,10 @@ the exact route cannot be matched.
 
 ---
 
-## Sharded Format — `shards/{Provider.Namespace}.json` (schema `3.0.0`)
+## Sharded Format — `shards/{Provider.Namespace}.json` (schema `3.1.0`)
 
 When `--sharded` is used, the exporter writes one JSON file per provider namespace
-into a `shards/` subdirectory.  Each shard uses the same schema version (`3.0.0`) as
+into a `shards/` subdirectory.  Each shard uses the same schema version (`3.1.0`) as
 the grouped format but scopes the content to a single provider.
 
 ### File naming
@@ -292,7 +316,7 @@ additional `provider_namespace` field:
 
 ```json
 {
-  "schema_version": "3.0.0",
+  "schema_version": "3.1.0",
   "export_format": "sharded",
   "provider_namespace": "Microsoft.Storage"
 }
@@ -363,6 +387,7 @@ Consumers should check `schema_version` before processing.
 
 | Version | Format | Changes |
 |---------|--------|---------|
+| `3.1.0` | grouped / sharded | Added bounded `auth`, parameter-name, request-schema, and response-schema summaries to version entries. Local schema references are resolved for structural fingerprints; descriptions, examples, defaults, and remote references are not exported. Existing 3.0.0 fields are unchanged. |
 | `3.0.0` | grouped / sharded | **New format.** Providers → hosts → routes → versions hierarchy. Replaces the flat operations array for size-sensitive consumers. `export_format: "grouped"` in metadata. The `--sharded` flag uses the same schema but scopes each file to one provider namespace (`export_format: "sharded"`). |
 | `2.1.0` | flat | Added `source_kind` field to each operation entry (which paths block the operation came from: `"paths"` or `"x-ms-paths"`). |
 | `2.0.0` | flat | **Breaking**: removed `provider_namespace`, `resource_provider_family`, `stable_versions`, `preview_versions`, `source_kind`, `tags`, `parameter_names`, `required_query_parameters`, and `has_api_version_parameter`. |

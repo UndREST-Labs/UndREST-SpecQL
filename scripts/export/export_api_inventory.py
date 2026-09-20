@@ -19,20 +19,21 @@ Options:
     --source-repo   Upstream repository identifier recorded in metadata (e.g. Azure/azure-rest-api-specs)
     --source-branch Branch name recorded in metadata (default: main)
     --minified      Also produce a minified api-index.min.json (no indentation)
-    --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.0.0)
-    --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.0.0)
+    --grouped       Also produce a grouped/deduplicated api-index-grouped.json (schema 3.1.0)
+    --sharded       Also produce per-provider shards under {output-dir}/shards/ (schema 3.1.0)
     --verbose       Print per-file progress messages
 
 Output files:
     api-index.json                     Flat pretty-printed index (schema 2.1.0)
     api-index.min.json                 Flat minified index (with --minified)
-    api-index-grouped.json             Grouped/deduplicated index (with --grouped, schema 3.0.0)
+    api-index-grouped.json             Grouped/deduplicated index (with --grouped, schema 3.1.0)
     api-index-grouped.min.json         Grouped minified index (with --grouped --minified)
-    shards/{Provider.Namespace}.json   Per-provider shard (with --sharded, schema 3.0.0)
+    shards/{Provider.Namespace}.json   Per-provider shard (with --sharded, schema 3.1.0)
     shards/{Provider.Namespace}.min.json  Minified per-provider shard (with --sharded --minified)
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -65,7 +66,12 @@ from normalize_api_inventory import (
 TOOL_NAME = "SpecRecon"
 TOOL_COMPONENT = "SpeQL"
 SCHEMA_VERSION = "2.1.0"          # flat format — minor bump for additive source_kind field
-GROUPED_SCHEMA_VERSION = "3.0.0"  # grouped/deduplicated format
+GROUPED_SCHEMA_VERSION = "3.1.0"  # additive research metadata for grouped/sharded format
+
+_MAX_SCHEMA_DEPTH = 8
+_MAX_SCHEMA_NODES = 1000
+_MAX_TOP_LEVEL_FIELDS = 100
+_MAX_METADATA_ITEMS = 100
 
 # Source metadata defaults — overridden at runtime via CLI args or source config.
 # These remain as module-level sentinels so that callers that import and use
@@ -234,7 +240,327 @@ def _detect_host(spec: dict, file_path: Path) -> str:
     return "unknown"
 
 
-def _parse_spec_file(file_path: Path, source_dir: Path, verbose: bool) -> tuple:
+def _resolve_local_ref(spec: dict, value, seen: set = None):
+    """Resolve a local JSON pointer without fetching external content."""
+    if not isinstance(value, dict) or not isinstance(value.get("$ref"), str):
+        return value
+    ref = value["$ref"]
+    if not ref.startswith("#/"):
+        return value
+    seen = set() if seen is None else set(seen)
+    if ref in seen or len(seen) >= _MAX_SCHEMA_DEPTH:
+        return {"type": "cyclic_ref"}
+    seen.add(ref)
+    current = spec
+    try:
+        for token in ref[2:].split("/"):
+            token = token.replace("~1", "/").replace("~0", "~")
+            current = current[token]
+    except (KeyError, TypeError):
+        return {"type": "unresolved_ref"}
+    return _resolve_local_ref(spec, current, seen)
+
+
+def _schema_shape(schema, spec: dict, depth: int = 0, seen_refs: set = None, budget: list = None):
+    """Return a bounded structural representation suitable for fingerprinting."""
+    if budget is None:
+        budget = [_MAX_SCHEMA_NODES]
+    if budget[0] <= 0 or depth > _MAX_SCHEMA_DEPTH:
+        return {"type": "truncated"}
+    budget[0] -= 1
+
+    seen_refs = set() if seen_refs is None else set(seen_refs)
+    if isinstance(schema, dict) and isinstance(schema.get("$ref"), str):
+        ref = schema["$ref"]
+        if not ref.startswith("#/"):
+            return {"type": "external_ref"}
+        if ref in seen_refs:
+            return {"type": "cyclic_ref"}
+        seen_refs.add(ref)
+        resolved = _resolve_local_ref(spec, schema, seen_refs - {ref})
+        if resolved is schema or (
+            isinstance(resolved, dict) and resolved.get("type") in {"cyclic_ref", "unresolved_ref"}
+        ):
+            return resolved
+        return _schema_shape(resolved, spec, depth + 1, seen_refs, budget)
+
+    if not isinstance(schema, dict):
+        return {"type": "unknown"}
+
+    schema_type = schema.get("type")
+    if not schema_type:
+        if isinstance(schema.get("properties"), dict):
+            schema_type = "object"
+        elif "items" in schema:
+            schema_type = "array"
+        else:
+            schema_type = "unknown"
+
+    shape = {"type": str(schema_type)}
+    if isinstance(schema.get("format"), str):
+        shape["format"] = schema["format"][:64]
+    if schema.get("nullable") is True or schema.get("x-nullable") is True:
+        shape["nullable"] = True
+
+    required = set(schema.get("required", [])) if isinstance(schema.get("required"), list) else set()
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        shape["properties"] = {
+            str(name)[:200]: {
+                "required": name in required,
+                "schema": _schema_shape(properties[name], spec, depth + 1, seen_refs, budget),
+            }
+            for name in sorted(properties, key=str)[:_MAX_TOP_LEVEL_FIELDS]
+        }
+        if len(properties) > _MAX_TOP_LEVEL_FIELDS:
+            shape["properties_truncated"] = True
+
+    if "items" in schema:
+        shape["items"] = _schema_shape(schema.get("items"), spec, depth + 1, seen_refs, budget)
+
+    additional = schema.get("additionalProperties")
+    if isinstance(additional, bool):
+        shape["additional_properties"] = additional
+    elif isinstance(additional, dict):
+        shape["additional_properties"] = _schema_shape(additional, spec, depth + 1, seen_refs, budget)
+
+    for keyword in ("allOf", "oneOf", "anyOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            shape[keyword] = [
+                _schema_shape(item, spec, depth + 1, seen_refs, budget)
+                for item in variants[:20]
+            ]
+            if len(variants) > 20:
+                shape[f"{keyword}_truncated"] = True
+
+    return shape
+
+
+def _effective_top_level_fields(shape: dict) -> tuple:
+    fields = {}
+    truncated = bool(shape.get("properties_truncated"))
+
+    for name, field in shape.get("properties", {}).items():
+        fields[name] = {
+            "name": name,
+            "type": field.get("schema", {}).get("type", "unknown"),
+            "required": bool(field.get("required")),
+        }
+
+    for branch in shape.get("allOf", []):
+        branch_fields, branch_truncated = _effective_top_level_fields(branch)
+        truncated = truncated or branch_truncated
+        for field in branch_fields:
+            current = fields.get(field["name"])
+            if not current:
+                fields[field["name"]] = dict(field)
+            else:
+                if current["type"] != field["type"]:
+                    current["type"] = "mixed"
+                current["required"] = current["required"] or field["required"]
+
+    for keyword in ("oneOf", "anyOf"):
+        branches = shape.get(keyword, [])
+        if not branches:
+            continue
+        branch_maps = []
+        for branch in branches:
+            branch_fields, branch_truncated = _effective_top_level_fields(branch)
+            truncated = truncated or branch_truncated
+            branch_maps.append({field["name"]: field for field in branch_fields})
+        for name in sorted(set().union(*(set(branch) for branch in branch_maps))):
+            alternatives = [branch[name] for branch in branch_maps if name in branch]
+            types = {field["type"] for field in alternatives}
+            alternative = {
+                "name": name,
+                "type": next(iter(types)) if len(types) == 1 else "mixed",
+                "required": len(alternatives) == len(branch_maps) and all(field["required"] for field in alternatives),
+            }
+            current = fields.get(name)
+            if not current:
+                fields[name] = alternative
+            elif current["type"] != alternative["type"]:
+                current["type"] = "mixed"
+
+    ordered = [fields[name] for name in sorted(fields)[:_MAX_TOP_LEVEL_FIELDS]]
+    return ordered, truncated or len(fields) > _MAX_TOP_LEVEL_FIELDS
+
+
+def _schema_summary(schema, spec: dict):
+    if not isinstance(schema, dict):
+        return None
+    shape = _schema_shape(schema, spec)
+    encoded = json.dumps(shape, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    top_level_fields, fields_truncated = _effective_top_level_fields(shape)
+    schema_type = shape.get("type", "unknown")
+    if schema_type == "unknown" and top_level_fields:
+        schema_type = "object"
+    summary = {
+        "fingerprint": "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24],
+        "type": schema_type,
+        "top_level_fields": top_level_fields,
+    }
+    if fields_truncated:
+        summary["fields_truncated"] = True
+    return summary
+
+
+def _parameter_metadata(path_item: dict, operation: dict, spec: dict) -> dict:
+    combined = []
+    for source in (path_item.get("parameters", []), operation.get("parameters", [])):
+        if isinstance(source, list):
+            combined.extend(source)
+    names = {"query": set(), "path": set(), "header": set(), "cookie": set()}
+    body_schemas = []
+    for parameter in combined:
+        parameter = _resolve_local_ref(spec, parameter)
+        if not isinstance(parameter, dict):
+            continue
+        location = parameter.get("in")
+        name = parameter.get("name")
+        if location in names and isinstance(name, str):
+            names[location].add(name[:200])
+        if location == "body":
+            summary = _schema_summary(parameter.get("schema"), spec)
+            if summary:
+                body_schemas.append(summary)
+
+    request_body = _resolve_local_ref(spec, operation.get("requestBody"))
+    if isinstance(request_body, dict):
+        content = request_body.get("content", {})
+        if isinstance(content, dict):
+            for content_type in sorted(content)[:20]:
+                media = content.get(content_type)
+                summary = _schema_summary(media.get("schema"), spec) if isinstance(media, dict) else None
+                if summary:
+                    summary = {**summary, "content_types": [str(content_type)[:200]]}
+                    body_schemas.append(summary)
+
+    deduped = {}
+    for summary in body_schemas:
+        key = summary["fingerprint"]
+        if key not in deduped:
+            deduped[key] = summary
+        else:
+            content_types = set(deduped[key].get("content_types", []))
+            content_types.update(summary.get("content_types", []))
+            if content_types:
+                deduped[key]["content_types"] = sorted(content_types)[:20]
+
+    return {
+        "parameters": {key: sorted(values)[:_MAX_METADATA_ITEMS] for key, values in names.items() if values},
+        "request_schemas": [deduped[key] for key in sorted(deduped)[:20]],
+    }
+
+
+def _response_metadata(operation: dict, spec: dict) -> list:
+    grouped = {}
+    responses = operation.get("responses", {})
+    if not isinstance(responses, dict):
+        return []
+    for status_code in sorted(responses, key=str)[:_MAX_METADATA_ITEMS]:
+        response = _resolve_local_ref(spec, responses[status_code])
+        if not isinstance(response, dict):
+            continue
+        candidates = []
+        if isinstance(response.get("schema"), dict):
+            candidates.append((None, response["schema"]))
+        content = response.get("content", {})
+        if isinstance(content, dict):
+            for content_type in sorted(content)[:20]:
+                media = content.get(content_type)
+                if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                    candidates.append((str(content_type)[:200], media["schema"]))
+        for content_type, schema in candidates:
+            summary = _schema_summary(schema, spec)
+            if not summary:
+                continue
+            key = summary["fingerprint"]
+            item = grouped.setdefault(key, {**summary, "status_codes": [], "content_types": []})
+            code = str(status_code)[:32]
+            if code not in item["status_codes"]:
+                item["status_codes"].append(code)
+            if content_type and content_type not in item["content_types"]:
+                item["content_types"].append(content_type)
+    result = []
+    for key in sorted(grouped)[:50]:
+        item = grouped[key]
+        item["status_codes"].sort()
+        item["content_types"].sort()
+        if not item["content_types"]:
+            item.pop("content_types")
+        result.append(item)
+    return result
+
+
+def _security_metadata(operation: dict, spec: dict) -> dict:
+    declared = "security" in operation or "security" in spec
+    requirements = operation.get("security") if "security" in operation else spec.get("security")
+    if not isinstance(requirements, list):
+        requirements = []
+
+    cleaned_requirements = []
+    scheme_names = set()
+    for requirement in requirements[:20]:
+        if not isinstance(requirement, dict):
+            continue
+        cleaned = {}
+        for name in sorted(requirement, key=str)[:20]:
+            scopes = requirement.get(name)
+            cleaned[str(name)[:200]] = sorted(str(scope)[:200] for scope in scopes[:100]) if isinstance(scopes, list) else []
+            scheme_names.add(str(name))
+        cleaned_requirements.append(cleaned)
+
+    definitions = spec.get("securityDefinitions", {})
+    components = spec.get("components", {})
+    if isinstance(components, dict) and isinstance(components.get("securitySchemes"), dict):
+        definitions = {**(definitions if isinstance(definitions, dict) else {}), **components["securitySchemes"]}
+    schemes = []
+    for name in sorted(scheme_names)[:20]:
+        definition = _resolve_local_ref(spec, definitions.get(name)) if isinstance(definitions, dict) else None
+        descriptor = {"name": name[:200], "type": "unknown"}
+        if isinstance(definition, dict):
+            descriptor["type"] = str(definition.get("type", "unknown"))[:64]
+            for source_key, target_key in (("in", "location"), ("scheme", "scheme"), ("name", "parameter_name")):
+                if isinstance(definition.get(source_key), str):
+                    descriptor[target_key] = definition[source_key][:64]
+            flows = definition.get("flows")
+            if isinstance(flows, dict):
+                descriptor["oauth_flows"] = sorted(str(flow)[:64] for flow in flows)[:20]
+            elif isinstance(definition.get("flow"), str):
+                descriptor["oauth_flows"] = [definition["flow"][:64]]
+        schemes.append(descriptor)
+
+    if not declared:
+        status = "unspecified"
+    elif not requirements or any(not requirement for requirement in cleaned_requirements):
+        status = "optional_or_anonymous"
+    else:
+        status = "required"
+    return {
+        "status": status,
+        "requirements": cleaned_requirements,
+        "schemes": schemes,
+    }
+
+
+def _operation_research_metadata(path_item: dict, operation: dict, spec: dict) -> dict:
+    request = _parameter_metadata(path_item, operation, spec)
+    return {
+        "auth": _security_metadata(operation, spec),
+        "parameters": request["parameters"],
+        "request_schemas": request["request_schemas"],
+        "response_schemas": _response_metadata(operation, spec),
+    }
+
+
+def _parse_spec_file(
+    file_path: Path,
+    source_dir: Path,
+    verbose: bool,
+    include_research_metadata: bool = False,
+) -> tuple:
     """Parse a single spec file and return (list_of_operations, error_or_None).
 
     Each operation is a dict matching the api-index.json schema.
@@ -313,6 +639,8 @@ def _parse_spec_file(file_path: Path, source_dir: Path, verbose: bool) -> tuple:
                     "is_preview": preview,
                     "lookup_key": lookup_key,
                 }
+                if include_research_metadata:
+                    entry["_research_metadata"] = _operation_research_metadata(path_item, operation, spec)
                 operations.append(entry)
 
     if verbose and operations:
@@ -348,6 +676,62 @@ def _build_summary(operations: list, spec_file_count: int, error_count: int) -> 
 # ---------------------------------------------------------------------------
 # Grouped export helpers
 # ---------------------------------------------------------------------------
+
+def _merge_unique_objects(existing: list, incoming: list, limit: int) -> list:
+    keyed = {
+        json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False): item
+        for item in existing if isinstance(item, dict)
+    }
+    for item in incoming:
+        if isinstance(item, dict):
+            key = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            keyed.setdefault(key, item)
+    return [keyed[key] for key in sorted(keyed)[:limit]]
+
+
+def _merge_schema_summaries(existing: list, incoming: list, limit: int) -> list:
+    merged = {item.get("fingerprint"): dict(item) for item in existing if isinstance(item, dict) and item.get("fingerprint")}
+    for item in incoming:
+        if not isinstance(item, dict) or not item.get("fingerprint"):
+            continue
+        fingerprint = item["fingerprint"]
+        if fingerprint not in merged:
+            merged[fingerprint] = dict(item)
+            continue
+        for field in ("status_codes", "content_types"):
+            values = set(merged[fingerprint].get(field, []))
+            values.update(item.get(field, []))
+            if values:
+                merged[fingerprint][field] = sorted(values)[:_MAX_METADATA_ITEMS]
+    return [merged[key] for key in sorted(merged)[:limit]]
+
+
+def _merge_research_metadata(target: dict, metadata: dict) -> None:
+    auth = metadata.get("auth", {}) if isinstance(metadata, dict) else {}
+    target_auth = target["auth"]
+    statuses = {target_auth.get("status", "unspecified"), auth.get("status", "unspecified")}
+    statuses.discard("unspecified")
+    target_auth["status"] = statuses.pop() if len(statuses) == 1 else ("mixed" if statuses else "unspecified")
+    target_auth["requirements"] = _merge_unique_objects(
+        target_auth.get("requirements", []), auth.get("requirements", []), 50
+    )
+    target_auth["schemes"] = _merge_unique_objects(
+        target_auth.get("schemes", []), auth.get("schemes", []), 50
+    )
+
+    for location, names in metadata.get("parameters", {}).items():
+        current = set(target["parameters"].get(location, []))
+        if isinstance(names, list):
+            current.update(str(name)[:200] for name in names)
+        target["parameters"][location] = sorted(current)[:_MAX_METADATA_ITEMS]
+
+    target["request_schemas"] = _merge_schema_summaries(
+        target.get("request_schemas", []), metadata.get("request_schemas", []), 20
+    )
+    target["response_schemas"] = _merge_schema_summaries(
+        target.get("response_schemas", []), metadata.get("response_schemas", []), 50
+    )
+
 
 def _build_grouped_index(flat_ops: list) -> dict:
     """Transform the flat operations list into a grouped providers structure.
@@ -405,8 +789,13 @@ def _build_grouped_index(flat_ops: list) -> dict:
                     "spec_files": [],
                     "operation_ids": [],
                     "source_kinds": [],
+                    "auth": {"status": "unspecified", "requirements": [], "schemes": []},
+                    "parameters": {},
+                    "request_schemas": [],
+                    "response_schemas": [],
                 }
             ver = route["versions"][api_version]
+            _merge_research_metadata(ver, op.get("_research_metadata", {}))
             # Combine preview classification across all contributing ops for this version.
             # If any op for (route_key, api_version) is preview, mark the version as preview.
             ver["is_preview"] = bool(ver.get("is_preview")) or bool(op["is_preview"])
@@ -422,6 +811,24 @@ def _build_grouped_index(flat_ops: list) -> dict:
             source_kind = op.get("source_kind", "")
             if source_kind and source_kind not in ver["source_kinds"]:
                 ver["source_kinds"].append(source_kind)
+
+    for provider in providers.values():
+        for host_entry in provider.get("hosts", {}).values():
+            for route in host_entry.get("routes", {}).values():
+                for version in route.get("versions", {}).values():
+                    auth = version.get("auth", {})
+                    if auth.get("status") == "unspecified" and not auth.get("requirements") and not auth.get("schemes"):
+                        version.pop("auth", None)
+                    parameters = version.get("parameters", {})
+                    for location in list(parameters):
+                        if not parameters[location]:
+                            parameters.pop(location)
+                    if not parameters:
+                        version.pop("parameters", None)
+                    if not version.get("request_schemas"):
+                        version.pop("request_schemas", None)
+                    if not version.get("response_schemas"):
+                        version.pop("response_schemas", None)
 
     return providers
 
@@ -611,7 +1018,12 @@ def run_export(
     for i, spec_file in enumerate(spec_files, start=1):
         if verbose:
             print(f"[{i}/{len(spec_files)}] {spec_file.name}", end="  ")
-        ops, err = _parse_spec_file(spec_file, source_dir, verbose)
+        ops, err = _parse_spec_file(
+            spec_file,
+            source_dir,
+            verbose,
+            include_research_metadata=grouped or sharded,
+        )
         if err:
             errors.append(err)
             if verbose:
@@ -622,9 +1034,13 @@ def run_export(
 
     summary = _build_summary(all_operations, len(spec_files), len(errors))
 
+    flat_operations = [
+        {key: value for key, value in operation.items() if not key.startswith("_")}
+        for operation in all_operations
+    ]
     payload = {
         "metadata": metadata,
-        "operations": all_operations,
+        "operations": flat_operations,
         "summary": summary,
     }
 
@@ -744,7 +1160,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Also produce a grouped/deduplicated api-index-grouped.json "
-            "(schema 3.0.0). Routes are grouped by provider → host → route, "
+            "(schema 3.1.0). Routes are grouped by provider → host → route, "
             "with version-specific info nested underneath."
         ),
     )
@@ -754,7 +1170,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Also produce per-provider shard files under {output-dir}/shards/. "
             "Each file is named {Provider.Namespace}.json and contains only that "
-            "provider's routes in the same grouped (schema 3.0.0) structure."
+            "provider's routes in the same grouped (schema 3.1.0) structure."
         ),
     )
     parser.add_argument(
