@@ -12,9 +12,13 @@ on:
         required: false
         default: 'config/sources/azure.json'
       spec_scope:
-        description: 'Subdirectory within the specs repo to export (default: specification)'
+        description: 'Optional subdirectory override within the specs repo'
         required: false
-        default: 'specification'
+        default: ''
+
+concurrency:
+  group: inventory-sharded-${{ github.event.inputs.source_config || 'config/sources/azure.json' }}
+  cancel-in-progress: false
 
 jobs:
   export-api-index-sharded:
@@ -33,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyfiglet pytest
+          pip install -r requirements.txt pytest
 
       - name: Resolve source config
         id: source
@@ -41,12 +45,20 @@ jobs:
           SOURCE_CONFIG="${{ github.event.inputs.source_config || 'config/sources/azure.json' }}"
           echo "config=${SOURCE_CONFIG}" >> "$GITHUB_OUTPUT"
           # Read fields from the source config for use in later steps
+          SOURCE_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('id','unknown'))")
           SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
           SOURCE_REPO=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_repo','unknown'))")
-          SOURCE_BRANCH=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_branch','main'))")
+          PUBLISH_TO_APISPY=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(str(bool(cfg.get('publish_to_apispy', False))).lower())")
+          APISPY_PACK_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_pack_id', cfg.get('id','unknown')))")
+          APISPY_PACK_NAME=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_pack_name', cfg.get('name', cfg.get('id','unknown'))))")
+          APISPY_PLATFORM=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('apispy_platform', cfg.get('id','unknown')))")
+          echo "source_id=${SOURCE_ID}" >> "$GITHUB_OUTPUT"
           echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
           echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
-          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "publish_to_apispy=${PUBLISH_TO_APISPY}" >> "$GITHUB_OUTPUT"
+          echo "apispy_pack_id=${APISPY_PACK_ID}" >> "$GITHUB_OUTPUT"
+          echo "apispy_pack_name=${APISPY_PACK_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apispy_platform=${APISPY_PLATFORM}" >> "$GITHUB_OUTPUT"
 
       - name: Clone / update spec repository
         run: |
@@ -56,26 +68,62 @@ jobs:
             --skip-db-build
 
       - name: Run API inventory export
+        env:
+          SPEC_SCOPE: ${{ github.event.inputs.spec_scope }}
         run: |
-          SCOPE="${{ github.event.inputs.spec_scope || 'specification' }}"
-          python3 scripts/export/export_api_inventory.py \
-            --source "${{ steps.source.outputs.specs_dir }}/${SCOPE}" \
-            --output-dir inventory/ \
-            --source-repo "${{ steps.source.outputs.source_repo }}" \
-            --source-branch "${{ steps.source.outputs.source_branch }}" \
-            --sharded \
-            --minified \
+          ARGS=(
+            --source-config "${{ steps.source.outputs.config }}"
+            --output-dir inventory/
+            --sharded
+            --minified
             --verbose
+          )
+          if [ -n "$SPEC_SCOPE" ]; then
+            ARGS+=(--source "${{ steps.source.outputs.specs_dir }}/${SPEC_SCOPE}")
+          fi
+          python3 scripts/export/export_api_inventory.py "${ARGS[@]}"
 
       - name: Run export pipeline tests
         run: |
           python3 -m pytest \
             tests/test_api_inventory_export.py \
             tests/test_api_inventory_normalization.py \
+            tests/test_inventory_hash.py \
+            tests/test_refresh_database.py \
             -v
 
+      - name: Restore last changed-export hash
+        uses: actions/cache/restore@v4
+        with:
+          path: .artifact-state/sharded-${{ steps.source.outputs.source_id }}
+          key: inventory-sharded-state-${{ steps.source.outputs.source_id }}-${{ github.run_id }}
+          restore-keys: |
+            inventory-sharded-state-${{ steps.source.outputs.source_id }}-
+
+      - name: Compare export content
+        id: content
+        run: |
+          STATE_DIR=".artifact-state/sharded-${{ steps.source.outputs.source_id }}"
+          CURRENT_HASH=$(python3 scripts/export/hash_inventory.py --inventory-dir inventory --format sharded)
+          PREVIOUS_HASH=$(cat "${STATE_DIR}/last.sha256" 2>/dev/null || true)
+          if [ "$CURRENT_HASH" = "$PREVIOUS_HASH" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Export content is unchanged; skipping release, dispatch, and artifact upload."
+          else
+            mkdir -p "$STATE_DIR"
+            printf '%s\n' "$CURRENT_HASH" > "${STATE_DIR}/last.sha256"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Export content changed: ${PREVIOUS_HASH:-<none>} -> $CURRENT_HASH"
+          fi
+
+      - name: Package changed shard export
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true'
+        run: |
+          cd inventory
+          zip -q -r "api-index-sharded.zip" shards/
+
       - name: Publish shards to GitHub Release
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -85,16 +133,16 @@ jobs:
 
           # Create release if it doesn't exist, then upload/overwrite assets
           if gh release view shards-latest > /dev/null 2>&1; then
-            gh release upload shards-latest inventory/api-index-sharded-*.zip --clobber
+            gh release upload shards-latest inventory/api-index-sharded.zip --clobber
           else
-            gh release create shards-latest inventory/api-index-sharded-*.zip \
+            gh release create shards-latest inventory/api-index-sharded.zip \
               --title "Latest API Shards" \
               --notes "$NOTES" \
               --latest
           fi
 
       - name: Trigger APISpy shard update
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: steps.content.outputs.changed == 'true' && steps.source.outputs.publish_to_apispy == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
           curl -X POST \
             -H "Authorization: Bearer ${{ secrets.APISPY_DISPATCH_TOKEN }}" \
@@ -107,14 +155,28 @@ jobs:
               "client_payload": {
                 "run_id": "${{ github.run_id }}",
                 "tag": "shards-latest",
+                "source_id": "${{ steps.source.outputs.source_id }}",
+                "pack_id": "${{ steps.source.outputs.apispy_pack_id }}",
+                "pack_name": "${{ steps.source.outputs.apispy_pack_name }}",
+                "platform": "${{ steps.source.outputs.apispy_platform }}",
                 "triggered_by": "${{ github.event_name }}"
               }
             }'
 
       - name: Upload inventory artifact
+        if: steps.content.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: api-index-sharded-${{ github.run_id }}
-          path: inventory/
+          path: |
+            inventory/
+            !inventory/api-index-sharded.zip
           retention-days: 2
+
+      - name: Save changed-export hash
+        if: steps.content.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .artifact-state/sharded-${{ steps.source.outputs.source_id }}
+          key: inventory-sharded-state-${{ steps.source.outputs.source_id }}-${{ github.run_id }}
 

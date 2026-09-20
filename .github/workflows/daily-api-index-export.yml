@@ -12,9 +12,13 @@ on:
         required: false
         default: 'config/sources/azure.json'
       spec_scope:
-        description: 'Subdirectory within the specs repo to export (default: specification)'
+        description: 'Optional subdirectory override within the specs repo'
         required: false
-        default: 'specification'
+        default: ''
+
+concurrency:
+  group: inventory-grouped-${{ github.event.inputs.source_config || 'config/sources/azure.json' }}
+  cancel-in-progress: false
 
 jobs:
   export-api-index:
@@ -33,19 +37,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyfiglet pytest
+          pip install -r requirements.txt pytest
 
       - name: Resolve source config
         id: source
         run: |
           SOURCE_CONFIG="${{ github.event.inputs.source_config || 'config/sources/azure.json' }}"
           echo "config=${SOURCE_CONFIG}" >> "$GITHUB_OUTPUT"
+          SOURCE_ID=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('id','unknown'))")
           SPECS_DIR=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('specs_dir','azure-rest-api-specs'))")
-          SOURCE_REPO=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_repo','unknown'))")
-          SOURCE_BRANCH=$(python3 -c "import json; cfg=json.load(open('${SOURCE_CONFIG}')); print(cfg.get('source_branch','main'))")
+          echo "source_id=${SOURCE_ID}" >> "$GITHUB_OUTPUT"
           echo "specs_dir=${SPECS_DIR}" >> "$GITHUB_OUTPUT"
-          echo "source_repo=${SOURCE_REPO}" >> "$GITHUB_OUTPUT"
-          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
 
       - name: Clone / update spec repository
         run: |
@@ -55,28 +57,66 @@ jobs:
             --skip-db-build
 
       - name: Run API inventory export
+        env:
+          SPEC_SCOPE: ${{ github.event.inputs.spec_scope }}
         run: |
-          SCOPE="${{ github.event.inputs.spec_scope || 'specification' }}"
-          python3 scripts/export/export_api_inventory.py \
-            --source "${{ steps.source.outputs.specs_dir }}/${SCOPE}" \
-            --output-dir inventory/ \
-            --source-repo "${{ steps.source.outputs.source_repo }}" \
-            --source-branch "${{ steps.source.outputs.source_branch }}" \
-            --grouped \
-            --minified \
+          ARGS=(
+            --source-config "${{ steps.source.outputs.config }}"
+            --output-dir inventory/
+            --grouped
+            --minified
             --verbose
+          )
+          if [ -n "$SPEC_SCOPE" ]; then
+            ARGS+=(--source "${{ steps.source.outputs.specs_dir }}/${SPEC_SCOPE}")
+          fi
+          python3 scripts/export/export_api_inventory.py "${ARGS[@]}"
 
       - name: Run export pipeline tests
         run: |
           python3 -m pytest \
             tests/test_api_inventory_export.py \
             tests/test_api_inventory_normalization.py \
+            tests/test_inventory_hash.py \
+            tests/test_refresh_database.py \
             -v
 
+      - name: Restore last changed-export hash
+        uses: actions/cache/restore@v4
+        with:
+          path: .artifact-state/grouped-${{ steps.source.outputs.source_id }}
+          key: inventory-grouped-state-${{ steps.source.outputs.source_id }}-${{ github.run_id }}
+          restore-keys: |
+            inventory-grouped-state-${{ steps.source.outputs.source_id }}-
+
+      - name: Compare export content
+        id: content
+        run: |
+          STATE_DIR=".artifact-state/grouped-${{ steps.source.outputs.source_id }}"
+          CURRENT_HASH=$(python3 scripts/export/hash_inventory.py --inventory-dir inventory --format grouped)
+          PREVIOUS_HASH=$(cat "${STATE_DIR}/last.sha256" 2>/dev/null || true)
+          if [ "$CURRENT_HASH" = "$PREVIOUS_HASH" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Export content is unchanged; skipping artifact upload."
+          else
+            mkdir -p "$STATE_DIR"
+            printf '%s\n' "$CURRENT_HASH" > "${STATE_DIR}/last.sha256"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Export content changed: ${PREVIOUS_HASH:-<none>} -> $CURRENT_HASH"
+          fi
+
       - name: Upload inventory artifact
+        if: steps.content.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: api-index-${{ github.run_id }}
           path: inventory/
           retention-days: 2
+
+      - name: Save changed-export hash
+        if: steps.content.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .artifact-state/grouped-${{ steps.source.outputs.source_id }}
+          key: inventory-grouped-state-${{ steps.source.outputs.source_id }}-${{ github.run_id }}
 

@@ -48,7 +48,7 @@ SpeQL/
 │       ├── CONSUMER_GUIDE.md
 │       └── EXPORT_PIPELINE.md
 ├── inventory/           # SpecRecon export artifacts (generated, not tracked)
-│   └── api-index-sharded-<run-id>.zip
+│   └── api-index-sharded.zip
 ├── queries/             # CodeQL security queries
 │   └── azure-security/
 │       ├── SasUriInResponse.ql  # Detects SAS URIs in API responses

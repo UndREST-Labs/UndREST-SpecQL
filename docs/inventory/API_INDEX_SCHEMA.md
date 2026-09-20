@@ -180,7 +180,7 @@ providers
 |----------------------|--------|-------------|
 | `method`             | string | HTTP method (uppercase) |
 | `path_template`      | string | URL path template with `{paramName}` placeholders |
-| `provider_namespace` | string | E.g. `"Microsoft.Storage"`, or `"unknown"` |
+| `provider_namespace` | string | E.g. `"Microsoft.Storage"`, source-profile namespace `"Microsoft.Graph"`, or `"unknown"` |
 | `plane`              | string | `"management"`, `"data"`, or `"unknown"` |
 | `lookup_key`         | string | `"<host>|<METHOD>|<path_template>"` for fast exact matching |
 | `api_family`         | object | Optional bounded structural family/hierarchy metadata derived from the normalized route template and provider namespace |
@@ -215,6 +215,11 @@ providers
 `api_family` is omitted when a route has no provider namespace or no structural
 resource-type path. It is structural only: descriptions, tags, operation names,
 examples, and inferred product semantics are not used.
+
+For the `microsoft-graph` source profile, canonical `/v1.0` and `/beta` paths are
+grouped under the fixed source namespace `Microsoft.Graph`. Graph routes do not
+receive ARM-specific `api_family` metadata because they have no
+`/providers/{namespace}` structure.
 
 #### Route `version_lineage` object
 

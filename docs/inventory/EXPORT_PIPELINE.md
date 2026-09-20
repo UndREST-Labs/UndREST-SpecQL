@@ -76,8 +76,10 @@ python3 scripts/export/export_api_inventory.py \
 
 | Option          | Default                                | Description                                    |
 |-----------------|----------------------------------------|------------------------------------------------|
-| `--source`      | `azure-rest-api-specs/specification`   | Path to the specifications directory to walk   |
+| `--source-config` | _(none)_ | Source config used to derive source path, provenance, and profile |
+| `--source`      | source config or `azure-rest-api-specs/specification` | Path override for the specifications directory |
 | `--output-dir`  | `inventory/`                           | Directory where output files are written       |
+| `--source-profile` | `auto` | `generic`, `microsoft-graph`, or source-repository auto-detection |
 | `--minified`    | _(off)_                                | Also write minified variants (no indentation)  |
 | `--grouped`     | _(off)_                                | Also write grouped/deduplicated `api-index-grouped.json` (schema 3.2.0) |
 | `--verbose`     | _(off)_                                | Print per-file progress messages               |
@@ -97,6 +99,19 @@ All files are listed in `.gitignore` and are not committed to the repository.
 They are produced as build artifacts by the CI workflow and uploaded as GitHub
 Actions artifacts.
 
+### Microsoft Graph
+
+The `microsoft-graph` profile ingests the two canonical YAML documents from the
+pinned `microsoftgraph/msgraph-metadata` checkout:
+
+- `openapi/v1.0/openapi.yaml`
+- `openapi/beta/openapi.yaml`
+
+It excludes alternate generated profiles, prepends each document's server base
+path to its routes, and groups all operations into `Microsoft.Graph`. PyYAML is
+the only added runtime dependency and loading uses `yaml.safe_load`. Remote
+references are never fetched.
+
 See [API_INDEX_SCHEMA.md](./API_INDEX_SCHEMA.md) for a full description of every
 field in the output.
 
@@ -110,7 +125,7 @@ field in the output.
 | **Output**          | SARIF findings, security reports            | Normalized JSON index of all known operations  |
 | **Scope**           | Focused queries (e.g. SAS URI exposure)     | All operations across the entire spec corpus   |
 | **Consumer**        | Security engineers, CodeQL analysis         | APISpy extension, runtime comparison tools     |
-| **CodeQL required** | Yes                                         | No — pure Python, stdlib only                  |
+| **CodeQL required** | Yes                                         | No — Python plus PyYAML for YAML OpenAPI sources |
 | **Run frequency**   | On demand / weekly                          | Daily (scheduled CI)                           |
 
 ---
@@ -118,13 +133,19 @@ field in the output.
 ## Scheduled / CI Generation
 
 A GitHub Actions workflow at `.github/workflows/daily-api-index-export.yml`
-runs the export automatically every day at 04:00 UTC and uploads the result as
-a build artifact.
+runs the export automatically every day at 04:00 UTC. Both export workflows
+compute a semantic SHA-256 over canonical JSON with volatile `generated_at`
+metadata removed. They restore the last changed-export hash from a small Actions
+cache and upload a new artifact only when content differs. Runs are serialized
+per source and export format so concurrent jobs cannot publish the same change
+twice. The sharded workflow also skips release replacement and APISpy dispatch
+for unchanged output, and only sources explicitly configured with
+`publish_to_apispy: true` may replace the shared APISpy release.
 
 To trigger the workflow manually from the GitHub UI:
 1. Navigate to **Actions → Daily API Index Export**
 2. Click **Run workflow**
-3. Optionally set `spec_scope` (default: `specification`)
+3. Optionally set `spec_scope`; otherwise the source config's `export_spec_path` (or `default_spec_path`) is used
 
 ---
 

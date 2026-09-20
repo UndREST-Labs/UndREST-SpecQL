@@ -205,7 +205,7 @@ UndREST-SpecQL/
 │       ├── CONSUMER_GUIDE.md
 │       └── EXPORT_PIPELINE.md
 ├── inventory/                  # Export artifacts (generated)
-│   └── api-index-sharded-<run-id>.zip
+│   └── api-index-sharded.zip
 ├── queries/                    # CodeQL queries — one subdirectory per platform
 │   ├── README.md               # How to add queries for a new platform
 │   └── azure-security/
@@ -246,8 +246,15 @@ SpeQL is designed to work with any OpenAPI/Swagger spec corpus, not just
 1. **A source config file** (`config/sources/<platform>.json`) — declares the
    upstream repository URL, local directory names, and metadata.
 2. **Optionally, platform-specific CodeQL queries** (`queries/<platform>-security/`).
+3. **For unusual layouts, a reviewed export profile** such as the built-in
+   `microsoft-graph` profile for canonical OpenAPI YAML.
 
-All scripts and workflows accept a `--source-config` flag:
+The registered Microsoft Graph source is pinned to
+`microsoftgraph/msgraph-metadata@b8cbef92f6959dca8150bf3edcc650863765e529`
+and emits a single `Microsoft.Graph` shard covering authoritative v1.0 and beta
+routes without runtime fetching or speculative metadata.
+
+All refresh scripts accept a `--source-config` flag:
 
 ```bash
 # Refresh using a custom source
@@ -415,11 +422,10 @@ python3 scripts/export/export_api_inventory.py \
   --output-dir inventory/ \
   --sharded --minified --verbose
 
-# Custom source
+# Microsoft Graph (after refreshing config/sources/microsoft-graph.json)
 python3 scripts/export/export_api_inventory.py \
-  --source my-platform-api-specs/specification \
-  --source-repo MyOrg/my-platform-api-specs \
-  --output-dir inventory/ \
+  --source-config config/sources/microsoft-graph.json \
+  --output-dir inventory/graph \
   --sharded --minified --verbose
 ```
 
@@ -428,7 +434,7 @@ python3 scripts/export/export_api_inventory.py \
 - `api-index-grouped.json` — Grouped/deduplicated (schema 3.2.0; additive auth/parameter/schema summaries plus API-family and version-lineage metadata)
 - `shards/{Provider.Namespace}.min.json` — Per-provider shards for APISpy
 
-**Cross-repo pipeline:** The `daily-api-index-export-sharded.yml` workflow runs nightly, publishes the sharded zip to the `shards-latest` GitHub Release, and triggers [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) to update its extension shard data automatically.
+**Cross-repo pipeline:** The `daily-api-index-export-sharded.yml` workflow runs nightly and computes a semantic content hash with volatile generation timestamps removed. Per-source runs are serialized to prevent duplicate publication races. For sources explicitly configured with `publish_to_apispy: true`, it replaces the stable sharded release asset and triggers [UndREST-APISpy](https://github.com/UndREST-Labs/UndREST-APISpy) only when the export differs from the last changed export. The grouped workflow applies the same deduplication before artifact upload.
 
 See [docs/inventory/EXPORT_PIPELINE.md](docs/inventory/EXPORT_PIPELINE.md) for the full schema and consumer guide.
 

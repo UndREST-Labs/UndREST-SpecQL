@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # Make the export package importable when running from the repo root
 _EXPORT_DIR = Path(__file__).parent.parent / "scripts" / "export"
 sys.path.insert(0, str(_EXPORT_DIR))
@@ -25,6 +27,23 @@ def _write_spec(directory: Path, filename: str, spec_obj: dict) -> Path:
     p = directory / filename
     p.write_text(json.dumps(spec_obj), encoding="utf-8")
     return p
+
+
+def _write_yaml_spec(directory: Path, filename: str, spec_obj: dict) -> Path:
+    """Write a spec dict as YAML into *directory* and return the Path."""
+    p = directory / filename
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(exp.yaml.safe_dump(spec_obj, sort_keys=False), encoding="utf-8")
+    return p
+
+
+def _minimal_graph_openapi(version: str, paths: dict) -> dict:
+    return {
+        "openapi": "3.0.4",
+        "info": {"title": "Microsoft Graph", "version": version},
+        "servers": [{"url": f"https://graph.microsoft.com/{version}"}],
+        "paths": paths,
+    }
 
 
 def _minimal_swagger(paths: dict = None, x_ms_paths: dict = None) -> dict:
@@ -51,6 +70,39 @@ class TestImport:
     def test_run_export_callable(self):
         assert callable(exp.run_export)
 
+    def test_export_source_config_loaded(self, tmp_path):
+        config_path = tmp_path / "source.json"
+        config_path.write_text(json.dumps({
+            "source_repo": "microsoftgraph/msgraph-metadata",
+            "export_profile": "microsoft-graph",
+        }))
+        config = exp._load_export_source_config(config_path)
+        assert config["export_profile"] == "microsoft-graph"
+
+    def test_invalid_export_source_config_rejected(self, tmp_path):
+        config_path = tmp_path / "source.json"
+        config_path.write_text("[not-json", encoding="utf-8")
+        with pytest.raises(ValueError, match="Cannot load source config"):
+            exp._load_export_source_config(config_path)
+
+    def test_registered_graph_source_is_pinned(self):
+        config_path = Path(__file__).parent.parent / "config" / "sources" / "microsoft-graph.json"
+        config = exp._load_export_source_config(config_path)
+        assert config["source_repo"] == "microsoftgraph/msgraph-metadata"
+        assert config["source_commit"] == "b8cbef92f6959dca8150bf3edcc650863765e529"
+        assert config["export_profile"] == "microsoft-graph"
+        assert config["export_spec_path"] == "openapi"
+        assert config["publish_to_apispy"] is False
+        assert config["apispy_pack_id"] == "microsoft-graph"
+
+    def test_registered_azure_source_preserves_full_export_scope(self):
+        config_path = Path(__file__).parent.parent / "config" / "sources" / "azure.json"
+        config = exp._load_export_source_config(config_path)
+        assert config["default_spec_path"] == "specification/logic"
+        assert config["export_spec_path"] == "specification"
+        assert config["publish_to_apispy"] is True
+        assert config["apispy_pack_id"] == "azure-rest-api-specs"
+
 
 # ---------------------------------------------------------------------------
 # discover_spec_files
@@ -71,8 +123,34 @@ class TestDiscoverSpecFiles:
 
     def test_skips_non_json_files(self, tmp_path):
         (tmp_path / "readme.md").write_text("# hello")
+        (tmp_path / "graph.yaml").write_text("openapi: 3.0.4")
         files = exp.discover_spec_files(tmp_path)
         assert not any(f.suffix != ".json" for f in files)
+
+    def test_graph_profile_discovers_yaml(self, tmp_path):
+        (tmp_path / "graph.yaml").write_text("openapi: 3.0.4")
+        files = exp.discover_spec_files(tmp_path, include_yaml=True)
+        assert [f.name for f in files] == ["graph.yaml"]
+
+    def test_graph_profile_limits_ingestion_to_canonical_openapi_files(self, tmp_path):
+        for relative in (
+            "v1.0/openapi.yaml",
+            "beta/openapi.yaml",
+            "v1.0/default.yaml",
+            "beta/powershell_v2.yaml",
+        ):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("openapi: 3.0.4")
+        files = exp.discover_spec_files(
+            tmp_path,
+            include_yaml=True,
+            allowed_relative_paths=set(exp._MICROSOFT_GRAPH_OPENAPI_PATHS),
+        )
+        assert {path.relative_to(tmp_path).as_posix() for path in files} == {
+            "v1.0/openapi.yaml",
+            "beta/openapi.yaml",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +248,116 @@ class TestParseSpecFile:
         assert err is None
         assert len(ops) == 1
         assert ops[0]["host"] == "management.azure.com"
+
+
+# ---------------------------------------------------------------------------
+# Microsoft Graph OpenAPI profile
+# ---------------------------------------------------------------------------
+
+class TestMicrosoftGraphProfile:
+    def test_profile_auto_selected_only_for_official_source(self):
+        assert exp._resolve_source_profile("auto", "microsoftgraph/msgraph-metadata") == "microsoft-graph"
+        assert exp._resolve_source_profile("auto", "Example/other") == "generic"
+        assert exp._resolve_source_profile("generic", "microsoftgraph/msgraph-metadata") == "generic"
+
+    def test_v1_yaml_uses_server_prefix_and_fixed_provider(self, tmp_path):
+        spec = _minimal_graph_openapi("v1.0", {
+            "/users/{user-id}": {
+                "get": {
+                    "operationId": "users.user.GetUser",
+                    "parameters": [
+                        {"name": "$select", "in": "query", "required": False},
+                        {"name": "user-id", "in": "path", "required": True},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            }
+        })
+        path = _write_yaml_spec(tmp_path, "openapi.yaml", spec)
+        ops, err = exp._parse_spec_file(
+            path,
+            tmp_path,
+            verbose=False,
+            include_research_metadata=True,
+            source_profile="microsoft-graph",
+        )
+        assert err is None
+        assert len(ops) == 1
+        operation = ops[0]
+        assert operation["host"] == "graph.microsoft.com"
+        assert operation["path_template"] == "/v1.0/users/{user-id}"
+        assert operation["api_versions"] == ["v1.0"]
+        assert operation["plane"] == "data"
+        assert operation["is_preview"] is False
+        assert operation["_provider_namespace"] == "Microsoft.Graph"
+        assert operation["_research_metadata"]["parameters"]["query"] == ["$select"]
+
+    def test_beta_yaml_is_preview(self, tmp_path):
+        spec = _minimal_graph_openapi("beta", {
+            "/groups": {
+                "get": {"operationId": "groups.ListGroups", "responses": {"200": {}}}
+            }
+        })
+        path = _write_yaml_spec(tmp_path, "openapi.yaml", spec)
+        ops, err = exp._parse_spec_file(
+            path,
+            tmp_path,
+            verbose=False,
+            source_profile="microsoft-graph",
+        )
+        assert err is None
+        assert ops[0]["path_template"] == "/beta/groups"
+        assert ops[0]["is_preview"] is True
+
+    def test_yaml_dependency_failure_is_clear(self, tmp_path, monkeypatch):
+        path = tmp_path / "openapi.yaml"
+        path.write_text("openapi: 3.0.4", encoding="utf-8")
+        monkeypatch.setattr(exp, "yaml", None)
+        ops, err = exp._parse_spec_file(
+            path,
+            tmp_path,
+            verbose=False,
+            source_profile="microsoft-graph",
+        )
+        assert ops == []
+        assert "PyYAML is required" in err
+
+    def test_graph_export_writes_single_compatible_shard(self, tmp_path):
+        source = tmp_path / "openapi"
+        v1 = _minimal_graph_openapi("v1.0", {
+            "/users/{user-id}": {
+                "get": {"operationId": "users.user.GetUser", "responses": {"200": {}}}
+            }
+        })
+        beta = _minimal_graph_openapi("beta", {
+            "/groups": {
+                "get": {"operationId": "groups.ListGroups", "responses": {"200": {}}}
+            }
+        })
+        _write_yaml_spec(source / "v1.0", "openapi.yaml", v1)
+        _write_yaml_spec(source / "beta", "openapi.yaml", beta)
+        output = tmp_path / "inventory"
+
+        result = exp.run_export(
+            source,
+            output,
+            minified=True,
+            verbose=False,
+            grouped=True,
+            sharded=True,
+            source_repo="microsoftgraph/msgraph-metadata",
+            source_branch="master",
+        )
+
+        assert result == 0
+        shard = json.loads((output / "shards" / "Microsoft.Graph.json").read_text())
+        assert shard["provider_namespace"] == "Microsoft.Graph"
+        assert set(shard["hosts"]) == {"graph.microsoft.com"}
+        routes = shard["hosts"]["graph.microsoft.com"]["routes"]
+        assert "GET /v1.0/users/{name}" in routes
+        assert "GET /beta/groups" in routes
+        assert not (output / "shards" / "unknown.json").exists()
+        assert shard["metadata"]["source_repo"] == "microsoftgraph/msgraph-metadata"
 
 
 # ---------------------------------------------------------------------------

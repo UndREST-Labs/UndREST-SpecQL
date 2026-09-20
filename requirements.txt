@@ -3,3 +3,6 @@
 
 # For rendering the SpeQL logo in ASCII art
 pyfiglet>=0.8.0
+
+# Safe parsing of authoritative OpenAPI YAML sources such as Microsoft Graph
+PyYAML>=6.0,<7.0
